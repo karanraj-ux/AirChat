@@ -9,7 +9,9 @@ data class ChessState(
     val whitePlayerId: String = "",
     val blackPlayerId: String = "",
     val winner: String = "", // "", "White", "Black", "Draw"
-    val botThinking: Boolean = false
+    val botThinking: Boolean = false,
+    val lastMoveFrom: Int = -1,
+    val lastMoveTo: Int = -1
 ) {
     fun toJson(): JSONObject {
         val obj = JSONObject()
@@ -20,6 +22,8 @@ data class ChessState(
         obj.put("whitePlayerId", whitePlayerId)
         obj.put("blackPlayerId", blackPlayerId)
         obj.put("winner", winner)
+        obj.put("lastMoveFrom", lastMoveFrom)
+        obj.put("lastMoveTo", lastMoveTo)
         return obj
     }
 
@@ -47,7 +51,9 @@ data class ChessState(
                 isWhiteTurn = obj.getBoolean("isWhiteTurn"),
                 whitePlayerId = obj.optString("whitePlayerId", ""),
                 blackPlayerId = obj.optString("blackPlayerId", ""),
-                winner = obj.optString("winner", "")
+                winner = obj.optString("winner", ""),
+                lastMoveFrom = obj.optInt("lastMoveFrom", -1),
+                lastMoveTo = obj.optInt("lastMoveTo", -1)
             )
         }
     }
@@ -178,7 +184,9 @@ object ChessEngine {
         return state.copy(
             pieces = newPieces,
             isWhiteTurn = !state.isWhiteTurn,
-            winner = newWinner
+            winner = newWinner,
+            lastMoveFrom = fromIdx,
+            lastMoveTo = toIdx
         )
     }
     
