@@ -301,7 +301,9 @@ private fun DoomscrollReelsView(
                 onCommentClick = { activeCommentPost = post },
                 onShareClick = {
                     shareNotification = "Beamed '${post.caption.take(25)}' to nearby mesh peers! 🚀"
-                    viewModel.sendMessage("📱 [Shared Reel]: \"${post.caption}\" by @${post.authorHandle}")
+                    val hostIp = viewModel.uiState.value.hotspotIp.ifBlank { "192.168.49.1" }
+                    val streamUrl = if (post.mediaType == "video") "http://$hostIp:8080/video/current" else "http://$hostIp:8080/"
+                    viewModel.sendMessage("🎥 [Shared Video Reel]: \"${post.caption}\" by @${post.authorHandle}\n🔗 Stream: $streamUrl")
                 }
             )
         }

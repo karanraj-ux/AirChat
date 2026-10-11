@@ -520,16 +520,8 @@ class BleMeshManager(
             // Connectionless Swarm Data: If advertised service data is present, process it directly without connecting GATT
             val serviceData = result.scanRecord?.getServiceData(PARCEL_UUID)
             if (serviceData != null && serviceData.isNotEmpty()) {
-                val framed = BlePacketFramer.decodeChunk(serviceData)
-                if (framed != null) {
-                    handleBinaryChunkFrame(framed)
-                    return
-                }
-                val payloadString = String(serviceData, java.nio.charset.StandardCharsets.UTF_8)
-                if (payloadString.startsWith("S:") || payloadString.startsWith("P:") || payloadString.startsWith("I:") || payloadString.startsWith("{")) {
-                    _incomingPackets.tryEmit(payloadString)
-                    return
-                }
+                handleGlobalReceivedData(serviceData)
+                return
             }
             
             // For GATT reads: BitChat-grade adaptive backoff (12s in Balanced/Eco, 5s in High Activity)
@@ -539,8 +531,63 @@ class BleMeshManager(
                 connectAndRead(device)
             }
         }
+
+        override fun onBatchScanResults(results: MutableList<ScanResult>?) {
+            results?.forEach { onScanResult(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, it) }
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            Log.e("BleMeshManager", "BLE Scan failed with errorCode: $errorCode")
+            isScanning = false
+            DiagnosticLogger.log("BLE Optimizer", "Scan Error", "Scanner failed with code $errorCode. Self-healing in 1.2s", EventStatus.ERROR)
+            scope.launch {
+                delay(1200L)
+                if (shouldScan) {
+                    startSingleScanSession()
+                }
+            }
+        }
     }
     
+    fun handleGlobalReceivedData(data: ByteArray?) {
+        if (data == null || data.isEmpty()) return
+
+        // BitChat-grade binary frame decoding with CRC16 verification
+        val framed = BlePacketFramer.decodeChunk(data)
+        if (framed != null) {
+            handleBinaryChunkFrame(framed)
+            return
+        }
+
+        val payloadString = String(data, java.nio.charset.StandardCharsets.UTF_8)
+        
+        if (payloadString.startsWith("S:")) {
+            val rawSsid = payloadString.substring(2)
+            if (rawSsid.startsWith("PRIVATE|")) {
+                lastHandshakeSsid = rawSsid.substring(8)
+                lastHandshakePwd = "PRIVATE"
+            } else {
+                lastHandshakeSsid = rawSsid
+            }
+        } else if (payloadString.startsWith("P:")) {
+            lastHandshakePwd = payloadString.substring(2)
+        } else if (payloadString.startsWith("I:")) {
+            lastHandshakeIp = payloadString.substring(2)
+            if (lastHandshakeSsid != null && lastHandshakePwd != null) {
+                try {
+                    val hsJson = org.json.JSONObject()
+                    hsJson.put("type", "handshake")
+                    hsJson.put("ssid", lastHandshakeSsid)
+                    hsJson.put("pwd", lastHandshakePwd)
+                    hsJson.put("ip", lastHandshakeIp)
+                    _incomingPackets.tryEmit(hsJson.toString())
+                } catch(e: Exception) {}
+            }
+        } else {
+            _incomingPackets.tryEmit(payloadString)
+        }
+    }
+
     private fun connectAndRead(device: BluetoothDevice) {
         if (!gattGovernorSemaphore.tryAcquire()) {
             // All 3 slots occupied, queue device if queue isn't saturated (< 10)
@@ -566,7 +613,7 @@ class BleMeshManager(
         }
         gattWatchdogs[device.address] = watchdog
 
-        activeGattRef = device.connectGatt(context, false, object : BluetoothGattCallback() {
+        val gattCallback = object : BluetoothGattCallback() {
             private var isSlotReleased = false
             private var fullPayloadBytes = ByteArray(0)
 
@@ -579,44 +626,7 @@ class BleMeshManager(
             }
 
             private fun handleReceivedData(data: ByteArray?) {
-                if (data == null || data.isEmpty()) return
-
-                // BitChat-grade binary frame decoding with CRC16 verification
-                val framed = BlePacketFramer.decodeChunk(data)
-                if (framed != null) {
-                    handleBinaryChunkFrame(framed)
-                    return
-                }
-
-                val payloadString = String(data, java.nio.charset.StandardCharsets.UTF_8)
-                
-                if (payloadString.startsWith("S:")) {
-                    val rawSsid = payloadString.substring(2)
-                    if (rawSsid.startsWith("PRIVATE|")) {
-                        lastHandshakeSsid = rawSsid.substring(8)
-                        lastHandshakePwd = "PRIVATE"
-                    } else {
-                        lastHandshakeSsid = rawSsid
-                    }
-                } else if (payloadString.startsWith("P:")) {
-                    lastHandshakePwd = payloadString.substring(2)
-                } else if (payloadString.startsWith("I:")) {
-                    lastHandshakeIp = payloadString.substring(2)
-                    if (lastHandshakeSsid != null && lastHandshakePwd != null) {
-                        try {
-                            val hsJson = org.json.JSONObject()
-                            hsJson.put("type", "handshake")
-                            hsJson.put("ssid", lastHandshakeSsid)
-                            hsJson.put("pwd", lastHandshakePwd)
-                            hsJson.put("ip", lastHandshakeIp)
-                            _incomingPackets.tryEmit(hsJson.toString())
-                        } catch(e: Exception) {}
-                    }
-                } else {
-                    fullPayloadBytes += data
-                    val fullPayloadString = String(fullPayloadBytes, java.nio.charset.StandardCharsets.UTF_8)
-                    _incomingPackets.tryEmit(fullPayloadString)
-                }
+                handleGlobalReceivedData(data)
             }
 
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -687,7 +697,13 @@ class BleMeshManager(
                 }
                 safeClose(gatt) // Disconnect after reading and release governor slot
             }
-        })
+        }
+
+        activeGattRef = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        } else {
+            device.connectGatt(context, false, gattCallback)
+        }
     }
 
     private val advertiseCallback = object : AdvertiseCallback() {
@@ -1056,7 +1072,7 @@ class BleMeshManager(
             }
             gattWatchdogs[targetDeviceAddress] = watchdog
 
-            activeGatt = device.connectGatt(context, false, object : BluetoothGattCallback() {
+            val dmCallback = object : BluetoothGattCallback() {
                 override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                     if (status != BluetoothGatt.GATT_SUCCESS || newState == BluetoothProfile.STATE_DISCONNECTED) {
                         safeRelease(false)
@@ -1117,7 +1133,13 @@ class BleMeshManager(
                     Log.d("BleMeshGovernor", "DM flushed to ${gatt.device.address} with status $status (<600ms)")
                     safeRelease(status == BluetoothGatt.GATT_SUCCESS)
                 }
-            })
+            }
+
+            activeGatt = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                device.connectGatt(context, false, dmCallback, BluetoothDevice.TRANSPORT_LE)
+            } else {
+                device.connectGatt(context, false, dmCallback)
+            }
         }
     }
 }

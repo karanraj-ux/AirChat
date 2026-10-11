@@ -32,7 +32,9 @@ import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -43,12 +45,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,17 +66,19 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.aetherweb.app.BotThinking
+import com.aetherweb.app.GamePacing
 import com.aetherweb.app.LudoEngine
 import com.aetherweb.app.LudoState
 import com.aetherweb.app.MeshNetworkManager
 import kotlinx.coroutines.delay
 
 /**
- * Studio-Grade Mesh Ludo:
- * 1. Chance indicator with active player pulse & ID.
- * 2. 30s turn countdown with pause/resume and auto-move fallback.
- * 3. Live token score tracking (Home X/4).
- * 4. Pass & Play and solo 🤖 Bot claiming.
+ * Studio-Grade Mesh Ludo with Universal Bot Pacing & Robust Slot Management:
+ * 1. Observable human-like bot pacing (Roll -> Think -> Move) with no instant 0ms finishes.
+ * 2. Proper slot management for all 4 players (You, Bot, Peer, Open).
+ * 3. Game Pacing selector (Relaxed / Normal / Blitz).
+ * 4. Non-blocking UI where bottom dice deck is completely separate from chat overlays.
  */
 @Composable
 fun LudoScreen(
@@ -90,50 +96,111 @@ fun LudoScreen(
     val myNodeId = MeshNetworkManager.localNodeId
     val isPassAndPlay = state.playerIds.values.none { it == myNodeId }
     val isMyTurn = (state.playerIds[state.turn] == myNodeId) || isPassAndPlay
+    val isBotTurn = state.playerIds[state.turn] == "bot"
 
     // Timer logic
     var timeLeftSeconds by remember(state.turn, state.hasRolled, state.winner) { mutableIntStateOf(30) }
     var isTimerPaused by remember { mutableStateOf(false) }
 
-    // Bot thinking buffer: the bot acts ~1.5s after its turn starts (human-like),
-    // not after the 30s timer expires. Stale-state guarded via botThinking flag.
-    val stateRef = androidx.compose.runtime.rememberUpdatedState(state)
-    LaunchedEffect(state.turn, state.winner) {
+    // Slot Config Dialog State
+    var selectedSlotIndex by remember { mutableStateOf<Int?>(null) }
+
+    // Human-like, observable Bot Turn State Machine
+    val stateRef = rememberUpdatedState(state)
+    LaunchedEffect(state.turn, state.hasRolled, state.playerIds, state.winner) {
         if (state.winner != -1) return@LaunchedEffect
-        val s = state
-        if (s.playerIds[s.turn] != "bot" || s.botThinking) return@LaunchedEffect
-        kotlinx.coroutines.delay(400) // let the turn change render first
-        onStateChange(s.copy(botThinking = true))
-        kotlinx.coroutines.delay(com.aetherweb.app.BotThinking.delayMs())
-        if (stateRef.value.botThinking) {
-            onStateChange(LudoEngine.makeBotMove(s.copy(botThinking = true)).copy(botThinking = false))
+        val currentTurn = state.turn
+        if (state.playerIds[currentTurn] != "bot") return@LaunchedEffect
+
+        // Phase 1: Turn awareness pause (bot notices it's its turn)
+        delay(BotThinking.getTurnAwarenessDelay())
+        if (stateRef.value.turn != currentTurn || stateRef.value.winner != -1) return@LaunchedEffect
+
+        if (!state.hasRolled) {
+            // Phase 2: Bot rolling dice
+            onStateChange(
+                stateRef.value.copy(
+                    botThinking = true,
+                    botStatus = "🎲 ${playerNames[currentTurn]} Bot is rolling dice..."
+                )
+            )
+            delay(BotThinking.getDiceRollDelay())
+            if (stateRef.value.turn != currentTurn || stateRef.value.winner != -1) return@LaunchedEffect
+
+            // Execute dice roll
+            val rolledState = LudoEngine.rollDice(stateRef.value)
+            if (!rolledState.hasRolled) {
+                // Rolled a number with NO possible moves
+                onStateChange(
+                    rolledState.copy(
+                        botThinking = false,
+                        botStatus = "⏭️ ${playerNames[currentTurn]} Bot rolled ${rolledState.diceValue} (No moves!)"
+                    )
+                )
+                delay(BotThinking.getPostMoveDelay())
+                return@LaunchedEffect
+            }
+
+            // Phase 3: Bot evaluates board & valid moves
+            onStateChange(
+                rolledState.copy(
+                    botThinking = true,
+                    botStatus = "🤔 ${playerNames[currentTurn]} Bot rolled ${rolledState.diceValue} & is planning move..."
+                )
+            )
+            delay(BotThinking.getEvaluationDelay())
+            if (stateRef.value.turn != currentTurn || stateRef.value.winner != -1) return@LaunchedEffect
+
+            val bestPiece = LudoEngine.pickBestBotMove(stateRef.value)
+            if (bestPiece != null) {
+                // Highlight chosen token for a split-second
+                onStateChange(
+                    stateRef.value.copy(
+                        selectedPieceIndex = bestPiece,
+                        botStatus = "🎯 ${playerNames[currentTurn]} moving token #${bestPiece + 1}..."
+                    )
+                )
+                delay(350L)
+                if (stateRef.value.turn != currentTurn || stateRef.value.winner != -1) return@LaunchedEffect
+
+                // Move token
+                val movedState = LudoEngine.movePiece(stateRef.value, currentTurn, bestPiece)
+                val summary = if (rolledState.diceValue == 6 && movedState.winner == -1) {
+                    "🎉 ${playerNames[currentTurn]} Bot rolled 6! Bonus turn!"
+                } else if (movedState.lastMoveSummary.isNotEmpty()) {
+                    movedState.lastMoveSummary
+                } else {
+                    "✨ ${playerNames[currentTurn]} moved token #${bestPiece + 1}"
+                }
+
+                onStateChange(
+                    movedState.copy(
+                        botThinking = false,
+                        botStatus = summary,
+                        selectedPieceIndex = null
+                    )
+                )
+            } else {
+                onStateChange(LudoEngine.passTurn(stateRef.value))
+            }
         }
     }
 
+    // Turn countdown timer for human players
     LaunchedEffect(state.turn, state.hasRolled, isTimerPaused, state.winner) {
-        if (state.winner != -1 || isTimerPaused) return@LaunchedEffect
+        if (state.winner != -1 || isTimerPaused || isBotTurn) return@LaunchedEffect
         timeLeftSeconds = 30
         while (timeLeftSeconds > 0) {
             delay(1000L)
             timeLeftSeconds--
         }
-        // Time expired: auto action
-        if (timeLeftSeconds == 0 && state.winner == -1) {
+        if (timeLeftSeconds == 0 && state.winner == -1 && !isBotTurn) {
             if (!state.hasRolled) {
                 val next = LudoEngine.rollDice(state)
-                if (next.playerIds[next.turn] == "bot") {
-                    onStateChange(LudoEngine.makeBotMove(next))
-                } else {
-                    onStateChange(next)
-                }
+                onStateChange(next)
             } else {
-                // Pass turn to next player
                 val next = state.copy(hasRolled = false, turn = (state.turn + 1) % 4)
-                if (next.playerIds[next.turn] == "bot") {
-                    onStateChange(LudoEngine.makeBotMove(next))
-                } else {
-                    onStateChange(next)
-                }
+                onStateChange(next)
             }
         }
     }
@@ -166,7 +233,7 @@ fun LudoScreen(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp),
+                .padding(horizontal = 10.dp, vertical = 4.dp),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1F2C34)),
             border = androidx.compose.foundation.BorderStroke(1.dp, playerColors[state.turn].copy(alpha = 0.5f))
@@ -174,7 +241,7 @@ fun LudoScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -182,7 +249,7 @@ fun LudoScreen(
                     // Active player chance avatar
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(36.dp)
                             .background(playerColors[state.turn].copy(alpha = pulseAlpha), CircleShape)
                             .border(2.dp, Color.White, CircleShape),
                         contentAlignment = Alignment.Center
@@ -195,100 +262,122 @@ fun LudoScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.width(10.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
 
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                if (state.winner != -1) "🏆 ${playerNames[state.winner]} WINS!" else "${playerNames[state.turn]}'s Chance",
+                                if (state.winner != -1) "🏆 ${playerNames[state.winner]} WINS!" else "${playerNames[state.turn]}'s Turn",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            if (state.botThinking) {
-                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(com.aetherweb.app.BotThinking.THINKING_LABEL, fontSize = 12.sp, color = Color.Gray)
-                                Spacer(modifier = Modifier.width(6.dp))
-                            }
                             val pid = state.playerIds[state.turn] ?: ""
                             val label = if (pid == "bot") "🤖 Bot" else if (pid == myNodeId) "You" else if (pid.isNotEmpty()) pid.take(4) else "Open"
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = playerColors[state.turn].copy(alpha = 0.2f)
+                                color = playerColors[state.turn].copy(alpha = 0.25f)
                             ) {
                                 Text(
                                     label,
                                     color = playerColors[state.turn],
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                 )
                             }
                         }
 
                         Text(
-                            if (isMyTurn) "👉 Your turn to make a move" else "Waiting for peer move...",
+                            text = if (state.botStatus.isNotEmpty()) {
+                                state.botStatus
+                            } else if (isMyTurn) {
+                                if (!state.hasRolled) "👉 Tap dice to roll your move" else "👉 Pick highlighted token to advance"
+                            } else if (isBotTurn) {
+                                "🤖 Bot calculating move..."
+                            } else {
+                                "Waiting for peer..."
+                            },
                             fontSize = 11.sp,
-                            color = if (isMyTurn) Color(0xFF34D399) else Color(0xFF94A3B8)
+                            color = if (isMyTurn) Color(0xFF34D399) else Color(0xFF94A3B8),
+                            maxLines = 1
                         )
                     }
                 }
 
-                // Turn Countdown Timer & Pause
-                if (state.winner == -1) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(36.dp)) {
-                            CircularProgressIndicator(
-                                progress = { timerProgress },
-                                color = timerColor,
-                                trackColor = Color(0xFF33444D),
-                                strokeWidth = 3.dp,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                            Text(
-                                "$timeLeftSeconds",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = timerColor,
-                                fontFamily = FontFamily.Monospace
-                            )
+                // SPEED SELECTOR & ACTIONS
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Speed pill toggle
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF131C21),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF33444D)),
+                        modifier = Modifier.clickable {
+                            BotThinking.currentPacing = when (BotThinking.currentPacing) {
+                                GamePacing.NORMAL -> GamePacing.RELAXED
+                                GamePacing.RELAXED -> GamePacing.BLITZ
+                                GamePacing.BLITZ -> GamePacing.NORMAL
+                            }
                         }
-
-                        Spacer(modifier = Modifier.width(4.dp))
-
-                        IconButton(
-                            onClick = { isTimerPaused = !isTimerPaused },
-                            modifier = Modifier.size(32.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
                         ) {
-                            Icon(
-                                if (isTimerPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                                contentDescription = "Pause Timer",
-                                tint = if (isTimerPaused) Color(0xFF10B981) else Color.LightGray,
-                                modifier = Modifier.size(18.dp)
+                            Text(BotThinking.currentPacing.icon, fontSize = 11.sp)
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text(
+                                BotThinking.currentPacing.label,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
                             )
                         }
                     }
-                } else {
-                    Button(
-                        onClick = { onStateChange(LudoState()) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                    ) {
-                        Text("New Match", fontSize = 11.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    if (state.winner == -1) {
+                        // Human timer
+                        if (!isBotTurn) {
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(32.dp)) {
+                                CircularProgressIndicator(
+                                    progress = { timerProgress },
+                                    color = timerColor,
+                                    trackColor = Color(0xFF33444D),
+                                    strokeWidth = 2.5.dp,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                Text(
+                                    "$timeLeftSeconds",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = timerColor,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = { onStateChange(LudoState()) },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                        ) {
+                            Text("New Match", fontSize = 10.sp, color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
         }
 
-        // PLAYER SLOTS & LIVE SCORECARD (HOME TOKENS)
+        // PLAYER SLOTS BAR WITH TAP-TO-CONFIGURE
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             for (i in 0..3) {
                 val score = state.pieces[i]?.count { it >= 57 } ?: 0
@@ -302,74 +391,100 @@ fun LudoScreen(
                         width = if (isCurrent) 1.5.dp else 1.dp,
                         color = if (isCurrent) playerColors[i] else Color(0xFF202C33)
                     ),
-                    modifier = Modifier.weight(1f).padding(horizontal = 2.dp)
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { selectedSlotIndex = i }
                 ) {
                     Column(
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(modifier = Modifier.size(8.dp).background(playerColors[i], CircleShape))
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Box(modifier = Modifier.size(7.dp).background(playerColors[i], CircleShape))
+                            Spacer(modifier = Modifier.width(3.dp))
                             Text(playerNames[i], fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         }
-                        Text("Home: $score/4", fontSize = 9.sp, color = Color(0xFF8696A0))
+                        Text("Home: $score/4", fontSize = 8.sp, color = Color(0xFF8696A0))
 
-                        if (pid.isEmpty()) {
-                            Row(modifier = Modifier.padding(top = 2.dp)) {
-                                Text(
-                                    "Claim",
-                                    fontSize = 9.sp,
-                                    color = playerColors[i],
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier
-                                        .clickable {
-                                            val newIds = state.playerIds.toMutableMap()
-                                            newIds[i] = myNodeId
-                                            onStateChange(state.copy(playerIds = newIds))
-                                        }
-                                        .padding(horizontal = 2.dp)
-                                )
-                                Text("•", fontSize = 9.sp, color = Color.Gray)
-                                Text(
-                                    "Bot",
-                                    fontSize = 9.sp,
-                                    color = Color(0xFF38BDF8),
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier
-                                        .clickable {
-                                            val newIds = state.playerIds.toMutableMap()
-                                            newIds[i] = "bot"
-                                            val next = state.copy(playerIds = newIds)
-                                            if (next.turn == i) {
-                                                onStateChange(LudoEngine.makeBotMove(next))
-                                            } else {
-                                                onStateChange(next)
-                                            }
-                                        }
-                                        .padding(horizontal = 2.dp)
-                                )
+                        Text(
+                            text = when (pid) {
+                                myNodeId -> "You"
+                                "bot" -> "🤖 Bot"
+                                "" -> "+ Claim"
+                                else -> pid.take(4)
+                            },
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = when (pid) {
+                                myNodeId -> Color(0xFF34D399)
+                                "bot" -> Color(0xFF38BDF8)
+                                "" -> playerColors[i]
+                                else -> Color.LightGray
                             }
-                        } else {
-                            Text(
-                                if (pid == myNodeId) "You" else if (pid == "bot") "🤖 Bot" else pid.take(4),
-                                fontSize = 9.sp,
-                                color = if (pid == myNodeId) Color(0xFF34D399) else Color.LightGray
-                            )
-                        }
+                        )
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
+        // QUICK ALL-BOTS & RESET ACTIONS
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "🤖 Auto Match (4 Bots)",
+                    fontSize = 10.sp,
+                    color = Color(0xFF38BDF8),
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF1E293B))
+                        .clickable {
+                            val allBots = mapOf(0 to "bot", 1 to "bot", 2 to "bot", 3 to "bot")
+                            onStateChange(state.copy(playerIds = allBots))
+                        }
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+
+                Text(
+                    text = "👥 Pass & Play",
+                    fontSize = 10.sp,
+                    color = Color(0xFFF59E0B),
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF1E293B))
+                        .clickable {
+                            val openAll = mapOf(0 to "", 1 to "", 2 to "", 3 to "")
+                            onStateChange(state.copy(playerIds = openAll))
+                        }
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+
+            if (state.lastMoveSummary.isNotEmpty()) {
+                Text(
+                    text = state.lastMoveSummary,
+                    fontSize = 9.sp,
+                    color = Color(0xFFFACC15),
+                    maxLines = 1
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(2.dp))
 
         // LUDO BOARD SURFACE
         BoxWithConstraints(
             modifier = Modifier
                 .weight(1f)
                 .aspectRatio(1f)
-                .padding(6.dp)
+                .padding(4.dp)
                 .background(Color(0xFF0F172A), RoundedCornerShape(12.dp))
                 .border(2.dp, Color(0xFF334155), RoundedCornerShape(12.dp))
                 .clip(RoundedCornerShape(12.dp))
@@ -395,12 +510,11 @@ fun LudoScreen(
                     }
                 }
 
-                // Draw home base center triangles
                 val centerPx = 7.5f * cellPx
                 drawCircle(color = Color.White.copy(alpha = 0.2f), radius = cellPx * 0.8f, center = Offset(centerPx, centerPx))
             }
 
-            // PIECE OVERLAYS WITH MOVABLE GLOW
+            // PIECE OVERLAYS WITH SELECTION GLOW
             val piecesHere = mutableMapOf<Pair<Int, Int>, MutableList<Pair<Int, Int>>>()
             for (p in 0..3) {
                 for (i in 0..3) {
@@ -416,6 +530,7 @@ fun LudoScreen(
                     val piecePos = state.pieces[p]!![idx]
                     val canThisPieceMove = state.turn == p && state.hasRolled && isMyTurn &&
                             (if (piecePos == 0) state.diceValue == 6 else (piecePos + state.diceValue <= 57))
+                    val isSelectedByBot = state.turn == p && state.selectedPieceIndex == idx
 
                     Box(
                         modifier = Modifier
@@ -424,21 +539,17 @@ fun LudoScreen(
                                 y = (cellSize * row) + (cellSize * 0.12f) + (index * 4).dp
                             )
                             .size(cellSize * 0.76f)
-                            .shadow(if (canThisPieceMove) 8.dp else 2.dp, CircleShape)
+                            .shadow(if (canThisPieceMove || isSelectedByBot) 10.dp else 2.dp, CircleShape)
                             .background(playerColors[p], CircleShape)
                             .border(
-                                width = if (canThisPieceMove) 2.5.dp else 1.5.dp,
-                                color = if (canThisPieceMove) Color.White else Color(0xCC000000),
+                                width = if (canThisPieceMove || isSelectedByBot) 2.5.dp else 1.5.dp,
+                                color = if (isSelectedByBot) Color(0xFFFDE047) else if (canThisPieceMove) Color.White else Color(0xCC000000),
                                 shape = CircleShape
                             )
                             .clickable {
-                                if (canThisPieceMove) {
+                                if (canThisPieceMove && !isBotTurn) {
                                     val next = LudoEngine.movePiece(state, p, idx)
-                                    if (next.playerIds[next.turn] == "bot") {
-                                        onStateChange(LudoEngine.makeBotMove(next))
-                                    } else {
-                                        onStateChange(next)
-                                    }
+                                    onStateChange(next)
                                 }
                             },
                         contentAlignment = Alignment.Center
@@ -453,11 +564,11 @@ fun LudoScreen(
             }
         }
 
-        // BOTTOM TACTICAL DICE DECK
+        // BOTTOM TACTICAL DICE DECK (SEPARATE & UNBLOCKED)
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1F2C34)),
             shape = RoundedCornerShape(16.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF33444D))
@@ -465,55 +576,63 @@ fun LudoScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        if (!state.hasRolled) "ROLL THE DICE" else "SELECT HIGHLIGHTED PIECE",
+                        text = if (isBotTurn) {
+                            "🤖 BOT TURN"
+                        } else if (!state.hasRolled) {
+                            "ROLL THE DICE"
+                        } else {
+                            "SELECT HIGHLIGHTED PIECE"
+                        },
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = if (!state.hasRolled) Color(0xFF25D366) else Color(0xFFF59E0B)
+                        color = if (isBotTurn) Color(0xFF38BDF8) else if (!state.hasRolled) Color(0xFF25D366) else Color(0xFFF59E0B)
                     )
                     Text(
-                        if (!state.hasRolled) {
-                            if (isMyTurn) "Tap dice to generate your move" else "Waiting for opponent to roll..."
+                        text = if (isBotTurn) {
+                            state.botStatus.ifEmpty { "Bot is calculating move..." }
+                        } else if (!state.hasRolled) {
+                            if (isMyTurn) "Tap dice button to generate move" else "Waiting for opponent's turn..."
                         } else {
-                            "Move token forward by ${state.diceValue} steps"
+                            "Advance token by ${state.diceValue} steps"
                         },
                         fontSize = 11.sp,
-                        color = Color(0xFF8696A0)
+                        color = Color(0xFF8696A0),
+                        maxLines = 1
                     )
                 }
 
+                Spacer(modifier = Modifier.width(8.dp))
+
                 // 3D TACTICAL DICE BUTTON
+                val diceEnabled = !state.hasRolled && isMyTurn && !isBotTurn
                 Box(
                     modifier = Modifier
-                        .size(58.dp)
+                        .size(54.dp)
                         .clip(RoundedCornerShape(14.dp))
                         .background(
-                            if (!state.hasRolled && isMyTurn) playerColors[state.turn] else Color(0xFF2A3942)
+                            if (diceEnabled) playerColors[state.turn] else Color(0xFF2A3942)
                         )
                         .border(
                             2.dp,
-                            if (!state.hasRolled && isMyTurn) Color.White else Color(0xFF374955),
+                            if (diceEnabled) Color.White else Color(0xFF374955),
                             RoundedCornerShape(14.dp)
                         )
-                        .clickable(enabled = !state.hasRolled && isMyTurn) {
+                        .clickable(enabled = diceEnabled) {
                             val next = LudoEngine.rollDice(state)
-                            if (next.playerIds[next.turn] == "bot") {
-                                onStateChange(LudoEngine.makeBotMove(next))
-                            } else {
-                                onStateChange(next)
-                            }
+                            onStateChange(next)
                         },
                     contentAlignment = Alignment.Center
                 ) {
                     if (state.hasRolled || state.diceValue > 0) {
                         Text(
                             state.diceValue.toString(),
-                            fontSize = 28.sp,
+                            fontSize = 26.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
@@ -522,12 +641,90 @@ fun LudoScreen(
                             Icons.Default.Casino,
                             contentDescription = "Roll Dice",
                             tint = Color.White,
-                            modifier = Modifier.size(30.dp)
+                            modifier = Modifier.size(28.dp)
                         )
                     }
                 }
             }
         }
+    }
+
+    // SLOT CONFIGURATION DIALOG
+    if (selectedSlotIndex != null) {
+        val slotIdx = selectedSlotIndex!!
+        val currentPid = state.playerIds[slotIdx] ?: ""
+        AlertDialog(
+            onDismissRequest = { selectedSlotIndex = null },
+            title = {
+                Text("${playerNames[slotIdx]} Player Slot", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column {
+                    Text(
+                        "Currently: ${
+                            when (currentPid) {
+                                myNodeId -> "Occupied by You"
+                                "bot" -> "Controlled by 🤖 Bot"
+                                "" -> "Open / Pass & Play"
+                                else -> "Peer ($currentPid)"
+                            }
+                        }",
+                        fontSize = 13.sp,
+                        color = Color.Gray
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Button(
+                        onClick = {
+                            val newIds = state.playerIds.toMutableMap()
+                            newIds[slotIdx] = myNodeId
+                            onStateChange(state.copy(playerIds = newIds))
+                            selectedSlotIndex = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = playerColors[slotIdx])
+                    ) {
+                        Text("Play Here (You)")
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Button(
+                        onClick = {
+                            val newIds = state.playerIds.toMutableMap()
+                            newIds[slotIdx] = "bot"
+                            onStateChange(state.copy(playerIds = newIds))
+                            selectedSlotIndex = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B))
+                    ) {
+                        Text("Assign 🤖 Bot to Slot", color = Color(0xFF38BDF8))
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Button(
+                        onClick = {
+                            val newIds = state.playerIds.toMutableMap()
+                            newIds[slotIdx] = ""
+                            onStateChange(state.copy(playerIds = newIds))
+                            selectedSlotIndex = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.DarkGray)
+                    ) {
+                        Text("Make Slot Open (Pass & Play)", color = Color.White)
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { selectedSlotIndex = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

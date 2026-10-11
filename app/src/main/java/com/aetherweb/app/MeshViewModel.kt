@@ -58,11 +58,26 @@ data class MeshNode(
 data class MediaInvite(val type: String, val url: String, val hostId: String = "", val mode: String = "collaborative", val maxSeats: Int = 0)
 data class PendingUser(val id: String, val name: String, val publicKeyBase64: String, val ip: String)
 
+data class PinnedHotspot(
+    val ssid: String,
+    val password: String,
+    val ip: String,
+    val hostName: String = "Host",
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 data class MeshState(
     val localUserName: String = android.os.Build.MODEL,
     val localUsernameId: String = "@" + android.os.Build.MODEL.lowercase().replace("[^a-z0-9_]".toRegex(), "") + "_" + (100..999).random(),
     val isUsernamePermanent: Boolean = false,
     val isGhostMode: Boolean = false,
+    val profileAvatarPreset: String = "avatar_cyber",
+    val profileStatusBio: String = "Online on AirChat Mesh 📡",
+    val profileSignatureColorHex: String = "#25D366",
+    val iceEmergencyNotes: String = "",
+    val isLiteMode: Boolean = BuildConfig.FLAVOR == "lite",
+    val packetsRoutedCount: Int = 0,
+    val arcadeWinsCount: Int = 0,
     val knownUsers: Map<String, String> = emptyMap(),
     val knownUserIds: Map<String, String> = emptyMap(),
     val isScanning: Boolean = false,
@@ -71,6 +86,12 @@ data class MeshState(
     val isWifiConnected: Boolean = false,
     val isHotspotActive: Boolean = false,
     val isPrivateRoom: Boolean = false,
+    val roomCapacityLimit: Int = 5,
+    val isRoomSealed: Boolean = false,
+    val autoLockWhenFull: Boolean = true,
+    val kickedIps: Set<String> = emptySet(),
+    val autoShareHotspotOverBle: Boolean = true,
+    val pinnedHotspot: PinnedHotspot? = null,
     val isBurnerRoomActive: Boolean = false,
     val burnerRoomCountdown: Int = 0,
     val burnerRoomId: String = "",
@@ -83,6 +104,11 @@ data class MeshState(
     val messages: List<ChatMessage> = emptyList(),
     val webClientConnectedEvent: Boolean = false,
     val isWebServerRunning: Boolean = false,
+    val webSessionPin: String = "",
+    val webSessionKeyHex: String = "",
+    val webSessionSaltHex: String = "",
+    val webSessionFingerprint: String = "",
+    val isWebE2eeArmed: Boolean = true,
     val autoJoinBeaconEnabled: Boolean = true,
     val discoveredHostSsid: String? = null,
     val discoveredHostPwd: String? = null,
@@ -177,15 +203,45 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
         if (isPerm) {
             val savedName = prefs.getString("user_display_name", null)
             val savedId = prefs.getString("user_username_id", null)
+            val savedAvatar = prefs.getString("user_avatar_preset", "avatar_cyber") ?: "avatar_cyber"
+            val savedBio = prefs.getString("user_status_bio", "Online on AirChat Mesh 📡") ?: "Online on AirChat Mesh 📡"
+            val savedColor = prefs.getString("user_sig_color", "#25D366") ?: "#25D366"
+            val savedIce = prefs.getString("user_ice_notes", "") ?: ""
             if (!savedName.isNullOrBlank() && !savedId.isNullOrBlank()) {
                 MeshNetworkManager._uiState.update { 
                     it.copy(
                         localUserName = savedName,
                         localUsernameId = savedId,
-                        isUsernamePermanent = true
+                        isUsernamePermanent = true,
+                        profileAvatarPreset = savedAvatar,
+                        profileStatusBio = savedBio,
+                        profileSignatureColorHex = savedColor,
+                        iceEmergencyNotes = savedIce
                     ) 
                 }
                 MeshNetworkManager.meshRouter.localNodeName = savedName
+            }
+        }
+
+        // Restore real telemetry stats and lite mode preference
+        val isLitePref = prefs.getBoolean("pref_lite_mode", BuildConfig.FLAVOR == "lite")
+        val savedPackets = prefs.getInt("packets_routed_count", 0)
+        val savedWins = prefs.getInt("arcade_wins_count", 0)
+        MeshNetworkManager._uiState.update { 
+            it.copy(
+                isLiteMode = isLitePref,
+                packetsRoutedCount = savedPackets,
+                arcadeWinsCount = savedWins
+            )
+        }
+
+        // Persist real routed packet telemetry
+        viewModelScope.launch {
+            MeshNetworkManager._uiState.collect { state ->
+                val currentStored = prefs.getInt("packets_routed_count", 0)
+                if (state.packetsRoutedCount > currentStored) {
+                    prefs.edit().putInt("packets_routed_count", state.packetsRoutedCount).apply()
+                }
             }
         }
 
@@ -305,10 +361,66 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
         MeshNetworkManager.webServerManager?.broadcastMessage(idPacket.toJsonString(), myId)
     }
 
+    fun updateFullProfile(
+        newName: String,
+        newUsernameId: String?,
+        avatarPreset: String,
+        statusBio: String,
+        signatureColorHex: String,
+        iceNotes: String,
+        isPermanent: Boolean
+    ) {
+        val finalId = if (!newUsernameId.isNullOrBlank()) {
+            val clean = newUsernameId.trim().lowercase().replace("[^a-z0-9_@]".toRegex(), "")
+            if (clean.startsWith("@")) clean else "@$clean"
+        } else {
+            MeshNetworkManager._uiState.value.localUsernameId
+        }
+
+        val myId = MeshNetworkManager.localNodeId
+        MeshNetworkManager._uiState.update { 
+            it.copy(
+                localUserName = newName,
+                localUsernameId = finalId,
+                isUsernamePermanent = isPermanent,
+                profileAvatarPreset = avatarPreset,
+                profileStatusBio = statusBio,
+                profileSignatureColorHex = signatureColorHex,
+                iceEmergencyNotes = iceNotes,
+                knownUsers = it.knownUsers + (myId to newName),
+                knownUserIds = it.knownUserIds + (myId to finalId)
+            ) 
+        }
+        MeshNetworkManager.meshRouter.localNodeName = newName
+        
+        val prefs = getApplication<Application>().getSharedPreferences("user_profile_prefs", Context.MODE_PRIVATE)
+        if (isPermanent) {
+            prefs.edit()
+                .putBoolean("is_permanent", true)
+                .putString("user_display_name", newName)
+                .putString("user_username_id", finalId)
+                .putString("user_avatar_preset", avatarPreset)
+                .putString("user_status_bio", statusBio)
+                .putString("user_sig_color", signatureColorHex)
+                .putString("user_ice_notes", iceNotes)
+                .apply()
+        } else {
+            prefs.edit().putBoolean("is_permanent", false).apply()
+        }
+
+        val idPacket = com.aetherweb.app.protocol.MeshPacket.SysIdentity(id = myId, name = newName, usernameId = finalId)
+        MeshNetworkManager.meshRouter.routePacket(idPacket)
+        MeshNetworkManager.webServerManager?.broadcastMessage(idPacket.toJsonString(), myId)
+    }
+
     fun setGhostMode(enabled: Boolean) {
         MeshNetworkManager._uiState.update { it.copy(isGhostMode = enabled) }
         val prefs = getApplication<Application>().getSharedPreferences("user_profile_prefs", Context.MODE_PRIVATE)
         prefs.edit().putBoolean("is_ghost_mode", enabled).apply()
+    }
+
+    fun regenerateWebSecurityKeys() {
+        MeshNetworkManager.initializeWebSessionKeys(regenerate = true)
     }
 
     fun updateLocalLocation(id: String, name: String, lat: Double, lng: Double) {
@@ -362,13 +474,74 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
         MeshNetworkManager.hotspotManager?.clearError()
     }
 
-    fun toggleHotspot(isPrivate: Boolean = false) {
+    fun toggleHotspot(isPrivate: Boolean = false, capacityLimit: Int? = null, autoSeal: Boolean? = null) {
         if (uiState.value.isHotspotActive) {
             MeshNetworkManager.hotspotManager?.stopHotspot()
-            MeshNetworkManager._uiState.update { it.copy(isPrivateRoom = false) }
+            MeshNetworkManager._uiState.update { it.copy(isPrivateRoom = false, isRoomSealed = false) }
         } else {
-            MeshNetworkManager._uiState.update { it.copy(isPrivateRoom = isPrivate) }
+            MeshNetworkManager._uiState.update {
+                it.copy(
+                    isPrivateRoom = isPrivate,
+                    roomCapacityLimit = capacityLimit ?: it.roomCapacityLimit,
+                    autoLockWhenFull = autoSeal ?: it.autoLockWhenFull,
+                    isRoomSealed = false
+                )
+            }
             MeshNetworkManager.hotspotManager?.startHotspot()
+        }
+    }
+
+    fun setRoomCapacityLimit(limit: Int) {
+        MeshNetworkManager._uiState.update { state ->
+            val count = 1 + state.approvedSpectators.size + state.connectedNodes.size
+            val shouldSeal = state.autoLockWhenFull && limit in 1..count
+            val messages = if (shouldSeal && !state.isRoomSealed) {
+                state.messages + ChatMessage(
+                    senderName = "System",
+                    senderId = "system",
+                    message = "🔒 Capacity limit updated to $limit. Room is now auto-sealed against new joins.",
+                    isFromMe = false
+                )
+            } else state.messages
+
+            state.copy(
+                roomCapacityLimit = limit,
+                isRoomSealed = if (shouldSeal) true else state.isRoomSealed,
+                messages = messages
+            )
+        }
+    }
+
+    fun toggleRoomSeal(sealed: Boolean? = null) {
+        MeshNetworkManager._uiState.update { state ->
+            val next = sealed ?: !state.isRoomSealed
+            val msg = if (next) "🔒 Room manually SEALED by Host. Incoming connections will be rejected." else "🔓 Room UNSEALED by Host. New peers can now request access."
+            state.copy(
+                isRoomSealed = next,
+                messages = state.messages + ChatMessage(
+                    senderName = "System",
+                    senderId = "system",
+                    message = msg,
+                    isFromMe = false
+                )
+            )
+        }
+    }
+
+    fun toggleAutoLockWhenFull(enabled: Boolean? = null) {
+        MeshNetworkManager._uiState.update { state ->
+            val next = enabled ?: !state.autoLockWhenFull
+            state.copy(autoLockWhenFull = next)
+        }
+    }
+
+    fun kickParticipant(idOrIp: String, displayName: String = idOrIp) {
+        MeshNetworkManager.kickParticipant(idOrIp, displayName)
+    }
+
+    fun unblockParticipant(ip: String) {
+        MeshNetworkManager._uiState.update { state ->
+            state.copy(kickedIps = state.kickedIps - ip)
         }
     }
 
@@ -758,22 +931,30 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
     
     fun broadcastTicTacToeState(newState: com.aetherweb.app.TicTacToeState) {
         MeshNetworkManager._uiState.update { it.copy(ticTacToeState = newState) }
-        MeshNetworkManager.meshRouter.routePacket(com.aetherweb.app.protocol.MeshPacket.MiniGameSync("tictactoe", newState.toJson()))
+        val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("tictactoe", newState.toJson())
+        MeshNetworkManager.meshRouter.routePacket(packet)
+        MeshNetworkManager.fanOutToGuests(packet.toJsonString(), "Host")
     }
 
     fun broadcastConnect4State(newState: com.aetherweb.app.Connect4State) {
         MeshNetworkManager._uiState.update { it.copy(connect4State = newState) }
-        MeshNetworkManager.meshRouter.routePacket(com.aetherweb.app.protocol.MeshPacket.MiniGameSync("connect4", newState.toJson()))
+        val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("connect4", newState.toJson())
+        MeshNetworkManager.meshRouter.routePacket(packet)
+        MeshNetworkManager.fanOutToGuests(packet.toJsonString(), "Host")
     }
 
     fun broadcastChessState(newState: ChessState) {
         MeshNetworkManager._uiState.update { it.copy(chessState = newState) }
-        MeshNetworkManager.meshRouter.routePacket(com.aetherweb.app.protocol.MeshPacket.MiniGameSync("chess", newState.toJson().toString()))
+        val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("chess", newState.toJson().toString())
+        MeshNetworkManager.meshRouter.routePacket(packet)
+        MeshNetworkManager.fanOutToGuests(packet.toJsonString(), "Host")
     }
 
     fun broadcastLudoState(newState: LudoState) {
         MeshNetworkManager._uiState.update { it.copy(ludoState = newState) }
-        MeshNetworkManager.meshRouter.routePacket(com.aetherweb.app.protocol.MeshPacket.MiniGameSync("ludo", newState.toJson().toString()))
+        val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("ludo", newState.toJson().toString())
+        MeshNetworkManager.meshRouter.routePacket(packet)
+        MeshNetworkManager.fanOutToGuests(packet.toJsonString(), "Host")
     }
 
     fun pulseBleChunk(chunk: String) {
@@ -783,19 +964,101 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
         getApplication<android.app.Application>().startService(intent)
     }
 
+    fun toggleAutoShareHotspotOverBle(enabled: Boolean? = null) {
+        MeshNetworkManager._uiState.update { 
+            val newVal = enabled ?: !it.autoShareHotspotOverBle
+            it.copy(autoShareHotspotOverBle = newVal)
+        }
+        val state = uiState.value
+        if (state.autoShareHotspotOverBle && state.isHotspotActive) {
+            pulseAllBleHotspotCredentials()
+        }
+    }
+
     fun pulseAllBleHotspotCredentials() {
         val state = uiState.value
         if (state.isHotspotActive && state.hotspotSsid.isNotEmpty()) {
+            val pwd = if (state.isPrivateRoom || !state.autoShareHotspotOverBle) "PRIVATE" else state.hotspotPassword
+            val ip = state.hotspotIp.ifEmpty { "192.168.49.1" }
+            
+            // 1. Broadcast SysHandshake unencrypted through mesh router
+            val hs = org.json.JSONObject().apply {
+                put("type", "sys_handshake")
+                put("ssid", state.hotspotSsid)
+                put("pwd", pwd)
+                put("ip", ip)
+                put("isPrivate", state.isPrivateRoom)
+            }
+            MeshNetworkManager.meshRouter.routeLocalMessage(hs.toString(), encrypt = false)
+
+            // 2. Pulse BLE advertising chunks sequentially
             viewModelScope.launch {
                 pulseBleChunk("S:" + state.hotspotSsid)
-                kotlinx.coroutines.delay(1200)
-                pulseBleChunk("P:" + state.hotspotPassword)
-                if (state.hotspotIp.isNotEmpty()) {
-                    kotlinx.coroutines.delay(1200)
-                    pulseBleChunk("I:" + state.hotspotIp)
+                kotlinx.coroutines.delay(1000)
+                pulseBleChunk("P:" + pwd)
+                if (ip.isNotEmpty()) {
+                    kotlinx.coroutines.delay(1000)
+                    pulseBleChunk("I:" + ip)
                 }
             }
         }
+    }
+
+    fun shareHotspotToChatAndPin() {
+        val state = uiState.value
+        if (!state.isHotspotActive || state.hotspotSsid.isEmpty()) return
+
+        val ssid = state.hotspotSsid
+        val pwd = state.hotspotPassword
+        val ip = state.hotspotIp.ifEmpty { "192.168.49.1" }
+        val portalUrl = "http://$ip:8080"
+
+        val chatText = "📶 *Wi-Fi Hotspot & Web Portal Active*\n" +
+                "• Network (SSID): $ssid\n" +
+                "• Password: $pwd\n" +
+                "• Web Portal: $portalUrl\n\n" +
+                "⚡ Join this Wi-Fi network to enjoy offline arcade games, file sharing, voice & video calls, or access the web portal from any browser!"
+
+        sendMessage(chatText)
+
+        val pinned = PinnedHotspot(
+            ssid = ssid,
+            password = pwd,
+            ip = ip,
+            hostName = state.localUserName
+        )
+        MeshNetworkManager._uiState.update { it.copy(pinnedHotspot = pinned) }
+
+        val pinPacket = com.aetherweb.app.protocol.MeshPacket.PinHotspot(
+            ssid = ssid,
+            pwd = pwd,
+            ip = ip,
+            hostName = state.localUserName,
+            isPinned = true
+        )
+        MeshNetworkManager.meshRouter.routePacket(pinPacket)
+        MeshNetworkManager.webServerManager?.broadcastMessage(pinPacket.toJsonString(), "System")
+    }
+
+    fun unpinHotspot() {
+        MeshNetworkManager._uiState.update { it.copy(pinnedHotspot = null) }
+        val unpinPacket = com.aetherweb.app.protocol.MeshPacket.PinHotspot(
+            ssid = "",
+            pwd = "",
+            ip = "",
+            isPinned = false
+        )
+        MeshNetworkManager.meshRouter.routePacket(unpinPacket)
+        MeshNetworkManager.webServerManager?.broadcastMessage(unpinPacket.toJsonString(), "System")
+    }
+
+    fun copyHotspotInfoToClipboard(context: android.content.Context) {
+        val state = uiState.value
+        val ip = state.hotspotIp.ifEmpty { "192.168.49.1" }
+        val info = "Wi-Fi Network (SSID): ${state.hotspotSsid}\nPassword: ${state.hotspotPassword}\nWeb Portal: http://$ip:8080"
+        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Wi-Fi Hotspot Info", info))
+        android.widget.Toast.makeText(context, "Hotspot details copied to clipboard!", android.widget.Toast.LENGTH_SHORT).show()
     }
 
     fun acceptInvite() {
@@ -866,6 +1129,10 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
             val niceName = when(type) {
                 "chess" -> "Standard Chess"
                 "ludo" -> "Mesh Ludo"
+                "tictactoe" -> "Tic-Tac-Toe"
+                "connect4" -> "Connect 4"
+                "truthdare" -> "Truth or Dare"
+                "ide" -> "Code IDE"
                 "web" -> "Web Media"
                 else -> type
             }
@@ -912,6 +1179,21 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSharedMediaMinimized(minimized: Boolean) {
         MeshNetworkManager._uiState.update { it.copy(isSharedMediaMinimized = minimized) }
+    }
+
+    fun setLiteMode(enabled: Boolean) {
+        val prefs = getApplication<Application>().getSharedPreferences("user_profile_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("pref_lite_mode", enabled).apply()
+        MeshNetworkManager._uiState.update { it.copy(isLiteMode = enabled) }
+    }
+
+    fun recordArcadeWin() {
+        val prefs = getApplication<Application>().getSharedPreferences("user_profile_prefs", Context.MODE_PRIVATE)
+        MeshNetworkManager._uiState.update { current ->
+            val newWins = current.arcadeWinsCount + 1
+            prefs.edit().putInt("arcade_wins_count", newWins).apply()
+            current.copy(arcadeWinsCount = newWins)
+        }
     }
 
     
@@ -976,10 +1258,26 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
 
 
     
-    fun rollRandomizer() {
-        val truths = listOf("What is your biggest fear?", "Who is your secret crush?", "What is the most embarrassing thing you've done?", "Have you ever lied to get out of trouble?")
-        val dares = listOf("Do 10 pushups", "Sing a song out loud", "Let someone draw on your face", "Do an impression of another player")
-        val isTruth = kotlin.random.Random.nextBoolean()
+    fun rollRandomizer(specificType: String? = null) {
+        val truths = listOf(
+            "What is your biggest fear?",
+            "Who is your secret crush?",
+            "What is the most embarrassing thing you've done?",
+            "Have you ever lied to get out of trouble?",
+            "What is the most embarrassing thing on your phone right now?",
+            "Who in this mesh would you trust with your darkest secret?",
+            "What is a secret talent nobody here knows about?"
+        )
+        val dares = listOf(
+            "Do 10 pushups",
+            "Sing a song out loud",
+            "Let someone draw on your face",
+            "Do an impression of another player",
+            "Send a silly selfie to the mesh chat right now",
+            "Speak in an accent until your next turn",
+            "Dance with no music for 30 seconds"
+        )
+        val isTruth = if (specificType != null) specificType.equals("Truth", ignoreCase = true) else kotlin.random.Random.nextBoolean()
         val type = if (isTruth) "Truth" else "Dare"
         val prompt = if (isTruth) truths.random() else dares.random()
         val id = java.util.UUID.randomUUID().toString()
@@ -991,11 +1289,29 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
         
         MeshNetworkManager._uiState.update { it.copy(activeRandomizer = RandomizerState(id, type, prompt, name)) }
         
-        // Auto dismiss after 10 seconds
+        // Auto dismiss after 15 seconds
         kotlinx.coroutines.GlobalScope.launch {
-            kotlinx.coroutines.delay(10000)
+            kotlinx.coroutines.delay(15000)
             MeshNetworkManager._uiState.update { if (it.activeRandomizer?.id == id) it.copy(activeRandomizer = null) else it }
         }
+    }
+
+    fun broadcastCustomRandomizer(type: String, prompt: String) {
+        val id = java.util.UUID.randomUUID().toString()
+        val name = uiState.value.localUserName
+        val randPacket = com.aetherweb.app.protocol.MeshPacket.Randomizer(id = id, rType = type, prompt = prompt, player = name)
+        MeshNetworkManager.meshRouter.routePacket(randPacket)
+        MeshNetworkManager.webServerManager?.broadcastMessage(randPacket.toJsonString(), "Randomizer")
+        MeshNetworkManager._uiState.update { it.copy(activeRandomizer = RandomizerState(id, type, prompt, name)) }
+    }
+
+    fun dismissRandomizer() {
+        MeshNetworkManager._uiState.update { it.copy(activeRandomizer = null) }
+    }
+
+    fun sendCodeSnippet(language: String, code: String) {
+        val snippetMsg = "💻 Shared a $language code snippet:\n```$language\n$code\n```"
+        sendMessage(snippetMsg)
     }
 
     fun startPoll(question: String, options: List<String>, attachmentUri: android.net.Uri? = null) {
@@ -1282,10 +1598,31 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun approveSpectator(id: String) {
-        MeshNetworkManager._uiState.update { it.copy(
-            pendingSpectators = it.pendingSpectators.filter { p -> p.ip != id },
-            approvedSpectators = it.approvedSpectators + id
-        )}
+        MeshNetworkManager._uiState.update { state ->
+            val currentCount = 1 + state.approvedSpectators.size + state.connectedNodes.size
+            if (state.roomCapacityLimit in 1..currentCount) {
+                // Room is full! Cannot approve without increasing limit or kicking someone
+                return@update state
+            }
+            val newApproved = (state.approvedSpectators + id).distinct()
+            val newCount = 1 + newApproved.size + state.connectedNodes.size
+            val shouldSeal = state.autoLockWhenFull && state.roomCapacityLimit > 0 && newCount >= state.roomCapacityLimit
+            val messages = if (shouldSeal && !state.isRoomSealed) {
+                state.messages + ChatMessage(
+                    senderName = "System",
+                    senderId = "system",
+                    message = "🔒 Room capacity reached ($newCount/${state.roomCapacityLimit}). Room is now automatically SEALED & LOCKED against surveillance/new joins.",
+                    isFromMe = false
+                )
+            } else state.messages
+
+            state.copy(
+                pendingSpectators = state.pendingSpectators.filter { p -> p.ip != id },
+                approvedSpectators = newApproved,
+                isRoomSealed = if (shouldSeal) true else state.isRoomSealed,
+                messages = messages
+            )
+        }
     }
     fun rejectSpectator(id: String) {
         MeshNetworkManager._uiState.update { it.copy(

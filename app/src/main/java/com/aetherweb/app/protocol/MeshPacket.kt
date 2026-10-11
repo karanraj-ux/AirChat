@@ -273,6 +273,25 @@ sealed class MeshPacket(val packetType: String) {
         }
     }
 
+    data class PinHotspot(
+        val ssid: String,
+        val pwd: String,
+        val ip: String,
+        val hostName: String = "Host",
+        val isPinned: Boolean = true,
+        val timestamp: Long = System.currentTimeMillis()
+    ) : MeshPacket(TYPE_PIN_HOTSPOT) {
+        override fun toJson(): JSONObject = JSONObject().apply {
+            put("type", TYPE_PIN_HOTSPOT)
+            put("ssid", ssid)
+            put("pwd", pwd)
+            put("ip", ip)
+            put("hostName", hostName)
+            put("isPinned", isPinned)
+            put("timestamp", timestamp)
+        }
+    }
+
     data class SysIdentity(
         val id: String,
         val name: String,
@@ -495,6 +514,7 @@ sealed class MeshPacket(val packetType: String) {
         const val TYPE_CLIPBOARD_SYNC = "clipboard_sync"
         const val TYPE_SYS_HANDSHAKE = "sys_handshake"
         const val TYPE_HANDSHAKE = "handshake"
+        const val TYPE_PIN_HOTSPOT = "pin_hotspot"
         const val TYPE_SYS_IDENTITY = "sys_identity"
         const val TYPE_SYS_STATE_SYNC = "sys_state_sync"
         const val TYPE_SYS_SYNC_REQUEST = "sys_sync_request"

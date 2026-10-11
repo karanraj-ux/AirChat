@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -46,8 +47,8 @@ fun MainChatScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val diagnosticEvents by viewModel.diagnosticEvents.collectAsStateWithLifecycle()
     val callLogs by viewModel.callLogs.collectAsStateWithLifecycle()
-    // Tier-2 "Seed": lite flavor is chat-only.
-    val isLite = BuildConfig.FLAVOR == "lite"
+    // AirChat Lite Mode (or flavor) toggle state
+    val isLite = uiState.isLiteMode || BuildConfig.FLAVOR == "lite"
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
         if (permissions.values.any { it }) {
@@ -113,12 +114,44 @@ fun MainChatScreen(
 
     if (uiState.pendingSpectators.isNotEmpty()) {
         val req = uiState.pendingSpectators.first()
+        val totalMembers = 1 + uiState.approvedSpectators.size + uiState.connectedNodes.size
+        val isFull = uiState.roomCapacityLimit in 1..totalMembers
         AlertDialog(
             onDismissRequest = { viewModel.rejectSpectator(req.ip) },
-            title = { Text("Web Guest Request") },
-            text = { Text(req.describe()) },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Security, contentDescription = null, tint = WhatsAppGreen)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Web Guest Request")
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(req.describe())
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (isFull) Color(0xFFFF5252).copy(alpha = 0.15f) else Color(0xFF25D366).copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, if (isFull) Color(0xFFFF5252) else WhatsAppGreen)
+                    ) {
+                        Text(
+                            text = if (isFull) "⚠️ Room is currently FULL ($totalMembers/${uiState.roomCapacityLimit}). Approving will expand the limit."
+                                   else "Capacity: $totalMembers/${if (uiState.roomCapacityLimit > 0) uiState.roomCapacityLimit else "Unlimited"} participants",
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isFull) Color(0xFFFF8A80) else Color(0xFFE9EDEF)
+                        )
+                    }
+                }
+            },
             confirmButton = {
-                TextButton(onClick = { viewModel.approveSpectator(req.ip) }) { Text("Approve") }
+                TextButton(
+                    onClick = {
+                        if (isFull) {
+                            viewModel.setRoomCapacityLimit(totalMembers + 1)
+                        }
+                        viewModel.approveSpectator(req.ip)
+                    }
+                ) { Text(if (isFull) "Expand & Approve" else "Approve", color = WhatsAppGreen, fontWeight = FontWeight.Bold) }
             },
             dismissButton = {
                 TextButton(onClick = { viewModel.rejectSpectator(req.ip) }) { Text("Reject", color = Color.Red) }
@@ -175,12 +208,21 @@ fun MainChatScreen(
 
     var showTopMenu by remember { mutableStateOf(false) }
     var showRoomSetupDialog by remember { mutableStateOf(false) }
+    var showRoomCapacityDialog by remember { mutableStateOf(false) }
+    var roomSetupIsPrivate by remember { mutableStateOf(false) }
+    var roomSetupCapacity by remember { mutableStateOf(5) }
+    var roomSetupAutoSeal by remember { mutableStateOf(true) }
     var showRosterDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
     var profileNameInput by remember { mutableStateOf(uiState.localUserName) }
     var profileUsernameIdInput by remember { mutableStateOf(uiState.localUsernameId) }
     var profileIsPermanent by remember { mutableStateOf(uiState.isUsernamePermanent) }
     var profileIsGhost by remember { mutableStateOf(uiState.isGhostMode) }
+    var profileAvatarPreset by remember { mutableStateOf(uiState.profileAvatarPreset) }
+    var profileStatusBioInput by remember { mutableStateOf(uiState.profileStatusBio) }
+    var profileSignatureColorHex by remember { mutableStateOf(uiState.profileSignatureColorHex) }
+    var profileIceNotesInput by remember { mutableStateOf(uiState.iceEmergencyNotes) }
+    var showMyQrDialog by remember { mutableStateOf(false) }
 
     var showSOSConfirmDialog by remember { mutableStateOf(false) }
     var sosCustomReasonInput by remember { mutableStateOf("") }
@@ -195,33 +237,50 @@ fun MainChatScreen(
 
                 TopAppBar(
                     title = {
-                        if (isDmActive) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFF203540)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.Person,
-                                        contentDescription = null,
-                                        tint = WhatsAppGreen,
-                                        modifier = Modifier.size(22.dp)
-                                    )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (!isDmActive) {
+                                        showRosterDialog = true
+                                    }
                                 }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = dmPeerName,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFFE9EDEF)
-                                        )
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isDmActive) Color(0xFF203540) else WhatsAppOutgoingDark)
+                                    .clickable {
+                                        if (!isDmActive) {
+                                            showProfileDialog = true
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    if (isDmActive) Icons.Default.Person else Icons.Default.AccountCircle,
+                                    contentDescription = if (isDmActive) "DM Peer" else "Profile",
+                                    tint = if (isDmActive) WhatsAppGreen else Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = if (isDmActive) dmPeerName else "AirChat Mesh",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFE9EDEF),
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    )
+                                    if (isDmActive) {
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Icon(
                                             Icons.Default.Lock,
@@ -229,63 +288,45 @@ fun MainChatScreen(
                                             tint = WhatsAppCheckmarkBlue,
                                             modifier = Modifier.size(13.dp)
                                         )
+                                    } else if (uiState.isRoomSealed) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            Icons.Default.Lock,
+                                            contentDescription = "Room Sealed",
+                                            tint = Color(0xFFFF5252),
+                                            modifier = Modifier.size(13.dp)
+                                        )
                                     }
-                                    Text(
-                                        text = "$dmPeerHandle • Private 1-on-1 Mesh",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = WhatsAppCheckmarkBlue,
-                                        maxLines = 1
-                                    )
                                 }
-                            }
-                        } else {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(CircleShape)
-                                        .background(WhatsAppOutgoingDark)
-                                        .clickable { showProfileDialog = true },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.AccountCircle,
-                                        contentDescription = "Profile",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column(
-                                    modifier = Modifier.clickable { showRosterDialog = true }
-                                ) {
-                                    Text(
-                                        text = "MeshChat Room",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFFE9EDEF),
-                                        maxLines = 1,
-                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = buildString {
-                                            append("${uiState.connectedNodes.size + 1} online • ${uiState.localUserName}")
-                                            if (uiState.isGhostMode) append(" • 👻 Ghost")
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (uiState.isGhostMode) Color(0xFFB388FF) else WhatsAppGreen,
-                                        maxLines = 1,
-                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                    )
-                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                val totalMembers = 1 + uiState.connectedNodes.size + uiState.approvedSpectators.size
+                                Text(
+                                    text = if (isDmActive) {
+                                        "$dmPeerHandle • Private 1-on-1 Mesh"
+                                    } else if (totalMembers > 1) {
+                                        "$totalMembers connected • P2P Encrypted"
+                                    } else if (uiState.isHotspotActive) {
+                                        "Wi-Fi Hotspot AP • Host Active"
+                                    } else {
+                                        "Mesh Standby • Offline P2P"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isDmActive) WhatsAppCheckmarkBlue
+                                            else if (uiState.isGhostMode) Color(0xFFB388FF)
+                                            else if (totalMembers > 1 || uiState.isConnected) WhatsAppGreen
+                                            else WhatsAppSubtleText,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                )
                             }
                         }
                     },
                     navigationIcon = {
                         if (isDmActive) {
-                            IconButton(onClick = { viewModel.clearDmPeer() }) {
+                            IconButton(
+                                onClick = { viewModel.clearDmPeer() },
+                                modifier = Modifier.size(38.dp)
+                            ) {
                                 Icon(Icons.Default.ArrowBack, contentDescription = "Back to Public Room", tint = Color.White)
                             }
                         }
@@ -296,11 +337,15 @@ fun MainChatScreen(
                     actions = {
                         // Alert indicator when emergency beacon is active
                         if (uiState.isEmergencyMode) {
-                            IconButton(onClick = { showSafetySosDialog = true }) {
+                            IconButton(
+                                onClick = { showSafetySosDialog = true },
+                                modifier = Modifier.size(38.dp)
+                            ) {
                                 Icon(
                                     Icons.Default.Warning,
                                     contentDescription = "Active Emergency SOS",
-                                    tint = Color.Yellow
+                                    tint = Color.Yellow,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
@@ -313,37 +358,65 @@ fun MainChatScreen(
                                     showCallOptionDialog = true
                                 }
                             },
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(38.dp)
                         ) {
-                            Icon(Icons.Default.Call, contentDescription = "Start Call", tint = Color(0xFFE9EDEF), modifier = Modifier.size(22.dp))
-                        }
-                        // Voice Room Phase 2: Discord-style voice dashboard, right in the chat room.
-                        IconButton(
-                            onClick = { showVoiceRoomSheet = true },
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Icon(Icons.Default.Mic, contentDescription = "Voice Room", tint = Color(0xFFE9EDEF), modifier = Modifier.size(22.dp))
+                            Icon(Icons.Default.Call, contentDescription = "Start Call", tint = Color(0xFFE9EDEF), modifier = Modifier.size(20.dp))
                         }
                         // Unified QR / Share Button
                         IconButton(
                             onClick = { showHotspotDialog = true },
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier.size(38.dp)
                         ) {
                             Icon(
                                 Icons.Default.QrCode2,
                                 contentDescription = "Invite & Share",
                                 tint = if (uiState.isHotspotActive) WhatsAppGreen else Color(0xFFE9EDEF),
-                                modifier = Modifier.size(22.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
-                        // Standardized 4-Item Menu
-                        IconButton(onClick = { showTopMenu = true }) {
-                            Icon(Icons.Default.MoreVert, "More Options", tint = Color(0xFFE9EDEF))
+                        // Standardized Overflow Menu
+                        IconButton(
+                            onClick = { showTopMenu = true },
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Icon(Icons.Default.MoreVert, "More Options", tint = Color(0xFFE9EDEF), modifier = Modifier.size(20.dp))
                         }
                         DropdownMenu(
                             expanded = showTopMenu,
                             onDismissRequest = { showTopMenu = false }
                         ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.FlashOn, contentDescription = null, tint = if (uiState.isLiteMode) WhatsAppGreen else Color.LightGray, modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text(if (uiState.isLiteMode) "AirChat Lite (Active)" else "AirChat Lite Mode", fontWeight = FontWeight.SemiBold)
+                                            Text(if (uiState.isLiteMode) "Low clutter • Chat, Call & Radar only" else "Switch to clean offline chat mode", style = MaterialTheme.typography.labelSmall, color = WhatsAppSubtleText)
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    showTopMenu = false
+                                    viewModel.setLiteMode(!uiState.isLiteMode)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Mic, contentDescription = null, tint = WhatsAppGreen, modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text("Voice Room", fontWeight = FontWeight.SemiBold)
+                                            Text("Discord-style Mesh Audio Channel", style = MaterialTheme.typography.labelSmall, color = WhatsAppSubtleText)
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    showTopMenu = false
+                                    showVoiceRoomSheet = true
+                                }
+                            )
                             DropdownMenuItem(
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -374,6 +447,35 @@ fun MainChatScreen(
                                 onClick = {
                                     showTopMenu = false
                                     showRoomPrivacyDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            if (uiState.isRoomSealed) Icons.Default.Lock else Icons.Default.Security,
+                                            contentDescription = null,
+                                            tint = if (uiState.isRoomSealed) Color(0xFFFF5252) else WhatsAppGreen,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text(
+                                                if (uiState.isRoomSealed) "🔒 Sealed Room Settings" else "🛡️ Room Capacity & Lock",
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                if (uiState.isRoomSealed) "Room sealed against outside joins"
+                                                else "Cap: ${if (uiState.roomCapacityLimit > 0) "${uiState.roomCapacityLimit} members" else "Unlimited"} • Anti-Infiltration",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = WhatsAppSubtleText
+                                            )
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    showTopMenu = false
+                                    showRoomCapacityDialog = true
                                 }
                             )
                             DropdownMenuItem(
@@ -426,14 +528,14 @@ fun MainChatScreen(
                         icon = { Icon(Icons.Default.Chat, "Chat") },
                         label = { Text("Chats") }
                     )
-                    // Tier-2 "Seed": hide non-chat tabs in lite flavor.
                     if (!isLite) {
-                    NavigationBarItem(
-                        selected = currentTab == "Media" || currentTab == "Music",
-                        onClick = { currentTab = "Media" },
-                        icon = { Icon(Icons.Default.VideoLibrary, "Stream") },
-                        label = { Text("Stream") }
-                    )
+                        NavigationBarItem(
+                            selected = currentTab == "Media" || currentTab == "Music",
+                            onClick = { currentTab = "Media" },
+                            icon = { Icon(Icons.Default.VideoLibrary, "Stream") },
+                            label = { Text("Stream") }
+                        )
+                    }
                     NavigationBarItem(
                         selected = currentTab == "Calls",
                         onClick = { currentTab = "Calls" },
@@ -457,12 +559,13 @@ fun MainChatScreen(
                         icon = { Icon(Icons.Default.LocationOn, "Radar") },
                         label = { Text("Radar") }
                     )
-                    NavigationBarItem(
-                        selected = currentTab == "Arcade",
-                        onClick = { currentTab = "Arcade" },
-                        icon = { Icon(Icons.Default.Edit, "Games") },
-                        label = { Text("Games") }
-                    )
+                    if (!isLite) {
+                        NavigationBarItem(
+                            selected = currentTab == "Arcade",
+                            onClick = { currentTab = "Arcade" },
+                            icon = { Icon(Icons.Default.Edit, "Games") },
+                            label = { Text("Games") }
+                        )
                     }
                 }
             }
@@ -539,8 +642,12 @@ fun MainChatScreen(
                             uiState = uiState,
                             callLogs = callLogs,
                             onInitiateCall = { peerId, peerName, isVideo ->
-                                val peerIp = if (uiState.isHotspotActive) "192.168.49.1" else ""
-                                CallManager.initiateCall(peerId, peerName, peerIp) { payload ->
+                                val peerIp = if (uiState.isHotspotActive) {
+                                    com.aetherweb.app.MeshNetworkManager.wifiSocketManager?.activeConnections?.keys?.firstOrNull() ?: ""
+                                } else {
+                                    "192.168.49.1"
+                                }
+                                CallManager.initiateCall(peerId, peerName, peerIp, isVideo) { payload ->
                                     com.aetherweb.app.MeshNetworkManager.meshRouter.routeLocalMessage(payload)
                                     com.aetherweb.app.MeshNetworkManager.webServerManager?.broadcastMessage(payload, com.aetherweb.app.MeshNetworkManager.localNodeId)
                                 }
@@ -558,23 +665,390 @@ fun MainChatScreen(
         }
         
         if (showRoomSetupDialog) {
-            androidx.compose.material3.AlertDialog(
+            AlertDialog(
                 onDismissRequest = { showRoomSetupDialog = false },
-                title = { Text("Create Mesh Room") },
-                text = { Text("Do you want this room to be Public (open to everyone nearby) or Private (requires users to manually enter the password)?") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Security, contentDescription = null, tint = WhatsAppGreen)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Mesh Room Security & Capacity", fontWeight = FontWeight.Bold)
+                    }
+                },
+                text = {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Text(
+                            "Configure room capacity and anti-surveillance locks before starting your offline mesh network.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        // 1. Room Visibility
+                        Text("1. Visibility & Key Exchange", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = !roomSetupIsPrivate,
+                                onClick = { roomSetupIsPrivate = false },
+                                label = { Text("Public (Open)", style = MaterialTheme.typography.labelSmall) },
+                                leadingIcon = { Icon(Icons.Default.Wifi, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = roomSetupIsPrivate,
+                                onClick = { roomSetupIsPrivate = true },
+                                label = { Text("Private (Hidden)", style = MaterialTheme.typography.labelSmall) },
+                                leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+
+                        // 2. Member Capacity Limit
+                        Text("2. Member Capacity Limit (5-10)", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            "Sets a strict cap on participants so no government, police, or unauthorized eavesdroppers can enter or view conversation.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(5 to "5 (Stealth)", 8 to "8", 10 to "10", 0 to "Unlimited").forEach { (cap, label) ->
+                                FilterChip(
+                                    selected = roomSetupCapacity == cap,
+                                    onClick = { roomSetupCapacity = cap },
+                                    label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        // Custom Stepper
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Custom Limit (2-20):", style = MaterialTheme.typography.bodySmall)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(
+                                    onClick = { if (roomSetupCapacity > 2) roomSetupCapacity-- else roomSetupCapacity = 2 },
+                                    enabled = roomSetupCapacity > 0
+                                ) { Text("➖", fontWeight = FontWeight.Bold) }
+                                Text(
+                                    if (roomSetupCapacity > 0) "$roomSetupCapacity Members" else "Unlimited",
+                                    fontWeight = FontWeight.Bold,
+                                    color = WhatsAppGreen
+                                )
+                                TextButton(
+                                    onClick = { if (roomSetupCapacity in 1..19) roomSetupCapacity++ else roomSetupCapacity = 5 }
+                                ) { Text("➕", fontWeight = FontWeight.Bold) }
+                            }
+                        }
+
+                        // 3. Auto-Seal Switch
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Auto-Seal When Full", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                                    Text("Locks room automatically once capacity is reached so no surveillance node can join.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Switch(
+                                    checked = roomSetupAutoSeal,
+                                    onCheckedChange = { roomSetupAutoSeal = it }
+                                )
+                            }
+                        }
+                    }
+                },
                 confirmButton = {
-                    Button(onClick = {
-                        viewModel.toggleHotspot(isPrivate = false)
-                        showRoomSetupDialog = false
-                        showHotspotDialog = true
-                    }) { Text("Public Room") }
+                    Button(
+                        onClick = {
+                            viewModel.toggleHotspot(
+                                isPrivate = roomSetupIsPrivate,
+                                capacityLimit = roomSetupCapacity,
+                                autoSeal = roomSetupAutoSeal
+                            )
+                            showRoomSetupDialog = false
+                            showHotspotDialog = true
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = WhatsAppGreen)
+                    ) {
+                        Text("Start Protected Room", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
                 },
                 dismissButton = {
-                    OutlinedButton(onClick = {
-                        viewModel.toggleHotspot(isPrivate = true)
-                        showRoomSetupDialog = false
-                        showHotspotDialog = true
-                    }) { Text("Private Room") }
+                    TextButton(onClick = { showRoomSetupDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        if (showRoomCapacityDialog) {
+            val totalMembers = 1 + uiState.connectedNodes.size + uiState.approvedSpectators.size
+            var customCapInput by remember { mutableStateOf(if (uiState.roomCapacityLimit > 0) uiState.roomCapacityLimit else 5) }
+
+            AlertDialog(
+                onDismissRequest = { showRoomCapacityDialog = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (uiState.isRoomSealed) Icons.Default.Lock else Icons.Default.Security,
+                            contentDescription = null,
+                            tint = if (uiState.isRoomSealed) Color(0xFFFF5252) else WhatsAppGreen
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text("Room Capacity & Security", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                if (uiState.isRoomSealed) "🔒 Status: Cryptographically SEALED"
+                                else "🛡️ Anti-Infiltration Gate Active",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (uiState.isRoomSealed) Color(0xFFFF5252) else WhatsAppGreen
+                            )
+                        }
+                    }
+                },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Status Card
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = when {
+                                    uiState.isRoomSealed -> Color(0xFFB71C1C).copy(alpha = 0.25f)
+                                    uiState.roomCapacityLimit in 1..totalMembers -> Color(0xFFFF9800).copy(alpha = 0.25f)
+                                    else -> Color(0xFF1B5E20).copy(alpha = 0.25f)
+                                }
+                            ),
+                            border = BorderStroke(
+                                1.dp,
+                                when {
+                                    uiState.isRoomSealed -> Color(0xFFFF5252)
+                                    uiState.roomCapacityLimit in 1..totalMembers -> Color(0xFFFFB74D)
+                                    else -> WhatsAppGreen
+                                }
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Active Participants:", fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "$totalMembers / ${if (uiState.roomCapacityLimit > 0) uiState.roomCapacityLimit else "Unlimited"}",
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = if (uiState.isRoomSealed) Color(0xFFFF8A80) else WhatsAppGreen,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+                                }
+                                Text(
+                                    text = when {
+                                        uiState.isRoomSealed -> "🔒 Room is SEALED — All incoming Wi-Fi / WebChat connection requests will be rejected with a 403 Room Locked screen."
+                                        uiState.roomCapacityLimit in 1..totalMembers -> "⚠️ Room is FULL (${totalMembers}/${uiState.roomCapacityLimit}). New connections are blocked."
+                                        uiState.roomCapacityLimit > 0 -> "🟢 Room is OPEN for approved peers (${uiState.roomCapacityLimit - totalMembers} slots remaining)."
+                                        else -> "🌐 Open room (no capacity limit set)."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        // Instant Manual Seal / Lock Toggle Button
+                        Button(
+                            onClick = { viewModel.toggleRoomSeal() },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (uiState.isRoomSealed) WhatsAppGreen else Color(0xFFB71C1C)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                Icons.Default.Lock,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                if (uiState.isRoomSealed) "Unlock / Unseal Room (Allow Joins)" else "🔒 Seal & Lock Room Now (Instant Lockdown)",
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+
+                        Divider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        // Capacity Limit Selector
+                        Text("Participant Capacity Limit", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            "Restrict the room to a verified squad (e.g. 5-10 people). Any outside observer is rejected.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(5 to "5 (Stealth)", 8 to "8", 10 to "10", 0 to "Unlimited").forEach { (cap, label) ->
+                                FilterChip(
+                                    selected = uiState.roomCapacityLimit == cap,
+                                    onClick = {
+                                        viewModel.setRoomCapacityLimit(cap)
+                                        if (cap > 0) customCapInput = cap
+                                    },
+                                    label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        // Custom Stepper
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Custom Limit (2-20):", style = MaterialTheme.typography.bodySmall)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(
+                                    onClick = {
+                                        if (customCapInput > 2) {
+                                            customCapInput--
+                                            viewModel.setRoomCapacityLimit(customCapInput)
+                                        }
+                                    }
+                                ) { Text("➖", fontWeight = FontWeight.Bold) }
+                                Text(
+                                    if (uiState.roomCapacityLimit > 0) "${uiState.roomCapacityLimit} Members" else "Unlimited",
+                                    fontWeight = FontWeight.Bold,
+                                    color = WhatsAppGreen
+                                )
+                                TextButton(
+                                    onClick = {
+                                        if (customCapInput < 20) {
+                                            customCapInput++
+                                            viewModel.setRoomCapacityLimit(customCapInput)
+                                        }
+                                    }
+                                ) { Text("➕", fontWeight = FontWeight.Bold) }
+                            }
+                        }
+
+                        // Auto-Seal Switch
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Auto-Seal When Full", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                                    Text("Locks door immediately once capacity is met.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Switch(
+                                    checked = uiState.autoLockWhenFull,
+                                    onCheckedChange = { viewModel.toggleAutoLockWhenFull(it) }
+                                )
+                            }
+                        }
+
+                        Divider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                        // Member Management with Kick & Block
+                        Text("Connected Members ($totalMembers)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+                        
+                        // 1. Host (You)
+                        ListItem(
+                            headlineContent = { Text("${uiState.localUserName} (You)", fontWeight = FontWeight.Bold) },
+                            supportingContent = { Text("${uiState.localUsernameId} • Host Phone 👑", color = WhatsAppGreen, style = MaterialTheme.typography.labelSmall) },
+                            leadingContent = { Icon(Icons.Default.Person, contentDescription = null, tint = WhatsAppGreen) }
+                        )
+
+                        // 2. BLE / Wi-Fi App Peers
+                        uiState.connectedNodes.forEach { node ->
+                            val displayName = uiState.knownUsers[node.id] ?: node.name
+                            ListItem(
+                                headlineContent = { Text(displayName, fontWeight = FontWeight.SemiBold) },
+                                supportingContent = { Text("${node.id.take(12)} • BLE/Wi-Fi Mesh Node", style = MaterialTheme.typography.labelSmall) },
+                                leadingContent = { Icon(Icons.Default.Wifi, contentDescription = null, tint = Color(0xFF53BDEB)) },
+                                trailingContent = {
+                                    Button(
+                                        onClick = {
+                                            viewModel.kickParticipant(node.id, displayName)
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB71C1C)),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Text("Kick & Block", fontSize = 11.sp, color = Color.White)
+                                    }
+                                }
+                            )
+                        }
+
+                        // 3. Web Guests
+                        uiState.approvedSpectators.forEach { guestIp ->
+                            ListItem(
+                                headlineContent = { Text("Web Guest ($guestIp)", fontWeight = FontWeight.SemiBold) },
+                                supportingContent = { Text("Browser WebChat Session", style = MaterialTheme.typography.labelSmall) },
+                                leadingContent = { Icon(Icons.Default.Language, contentDescription = null, tint = Color(0xFFFF9800)) },
+                                trailingContent = {
+                                    Button(
+                                        onClick = {
+                                            viewModel.kickParticipant(guestIp, "Web Guest $guestIp")
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB71C1C)),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Text("Kick & Block", fontSize = 11.sp, color = Color.White)
+                                    }
+                                }
+                            )
+                        }
+
+                        // Blocked list (if any)
+                        if (uiState.kickedIps.isNotEmpty()) {
+                            Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                            Text("Blocked Participants (${uiState.kickedIps.size})", fontWeight = FontWeight.Bold, color = Color(0xFFFF5252), style = MaterialTheme.typography.labelMedium)
+                            uiState.kickedIps.forEach { blockedIp ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(blockedIp, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                                    TextButton(onClick = { viewModel.unblockParticipant(blockedIp) }) {
+                                        Text("Unblock", color = WhatsAppGreen, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { showRoomCapacityDialog = false },
+                        colors = ButtonDefaults.buttonColors(containerColor = WhatsAppGreen)
+                    ) {
+                        Text("Done", color = Color.White)
+                    }
                 }
             )
         }
@@ -603,45 +1077,124 @@ fun MainChatScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        // WhatsApp Style Circular Avatar Header
+                        // WhatsApp Style Circular Avatar Header & Selected Preset Badge
+                        val avatarPresets = listOf(
+                            Pair("avatar_cyber", "🤖 Cyber"),
+                            Pair("avatar_dj", "🎧 DJ"),
+                            Pair("avatar_hacker", "💻 Hacker"),
+                            Pair("avatar_radio", "📻 Radio"),
+                            Pair("avatar_medic", "🩺 Medic"),
+                            Pair("avatar_gamer", "🎮 Gamer"),
+                            Pair("avatar_scout", "🧭 Scout"),
+                            Pair("avatar_ghost", "👻 Ghost")
+                        )
+                        val activeAvatarEmoji = avatarPresets.find { it.first == profileAvatarPreset }?.second?.take(2) ?: "🤖"
+
                         Box(contentAlignment = Alignment.BottomEnd) {
                             Box(
                                 modifier = Modifier
-                                    .size(76.dp)
+                                    .size(80.dp)
                                     .clip(CircleShape)
                                     .background(WhatsAppOutgoingDark)
-                                    .border(2.dp, WhatsAppGreen, CircleShape),
+                                    .border(2.dp, Color(android.graphics.Color.parseColor(profileSignatureColorHex)), CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = profileNameInput.firstOrNull()?.uppercase() ?: "M",
-                                    fontSize = 32.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
+                                    text = activeAvatarEmoji,
+                                    fontSize = 36.sp
                                 )
                             }
                             Box(
                                 modifier = Modifier
                                     .size(26.dp)
                                     .clip(CircleShape)
-                                    .background(WhatsAppGreen),
+                                    .background(Color(android.graphics.Color.parseColor(profileSignatureColorHex))),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(
-                                    Icons.Default.CameraAlt,
-                                    contentDescription = "Edit photo",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(15.dp)
+                                Text(
+                                    text = profileNameInput.firstOrNull()?.uppercase() ?: "U",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.Black
                                 )
                             }
                         }
 
-                        Text(
-                            text = "🟢 Active on Mesh & WebChat",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = WhatsAppGreen,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        // Avatar Presets Quick Picker Carousel
+                        Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "SELECT AVATAR PERSONA",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = WhatsAppSubtleText
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            androidx.compose.foundation.lazy.LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+                            ) {
+                                items(avatarPresets.size) { idx ->
+                                    val (key, label) = avatarPresets[idx]
+                                    val isSelected = profileAvatarPreset == key
+                                    FilterChip(
+                                        selected = isSelected,
+                                        onClick = { profileAvatarPreset = key },
+                                        label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = Color(android.graphics.Color.parseColor(profileSignatureColorHex)).copy(alpha = 0.25f),
+                                            selectedLabelColor = Color(android.graphics.Color.parseColor(profileSignatureColorHex))
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        // MESH NODE REPUTATION & ROLE BANNER
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF141F26)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "📡 Node #${com.aetherweb.app.MeshNetworkManager.localNodeId.take(8).uppercase()}",
+                                        color = Color(0xFF53BDEB),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                    Text(
+                                        text = "🟢 Active Relay",
+                                        color = WhatsAppGreen,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceAround
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("Relayed Packets", fontSize = 10.sp, color = WhatsAppSubtleText)
+                                        Text("${uiState.packetsRoutedCount} 📦", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                    }
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("Arcade Trophies", fontSize = 10.sp, color = WhatsAppSubtleText)
+                                        Text("${uiState.arcadeWinsCount} 🏆", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFD700))
+                                    }
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("Mesh Karma", fontSize = 10.sp, color = WhatsAppSubtleText)
+                                        Text("Mesh Hero 🎖️", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF00E5FF))
+                                    }
+                                }
+                            }
+                        }
 
                         // Display Name (WhatsApp Style)
                         OutlinedTextField(
@@ -694,6 +1247,99 @@ fun MainChatScreen(
                                 cursorColor = Color(0xFF53BDEB)
                             )
                         )
+
+                        // CUSTOM STATUS / BIO MESSAGE WITH QUICK PILLS
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = profileStatusBioInput,
+                                onValueChange = { profileStatusBioInput = it },
+                                label = { Text("Mesh Status / Bio Broadcast") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                leadingIcon = {
+                                    Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF00E5FF))
+                                },
+                                supportingText = {
+                                    Text("Broadcasted to all mesh peers in the room roster", fontSize = 11.sp)
+                                },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color(0xFF00E5FF),
+                                    focusedLabelColor = Color(0xFF00E5FF),
+                                    cursorColor = Color(0xFF00E5FF)
+                                )
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            val quickStatuses = listOf("🎧 DJing Beats", "♟️ Want Chess", "⚡ High Battery", "🚨 Off-Grid SOS", "🟢 Online Mesh")
+                            androidx.compose.foundation.lazy.LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                items(quickStatuses.size) { sIdx ->
+                                    val status = quickStatuses[sIdx]
+                                    AssistChip(
+                                        onClick = { profileStatusBioInput = status },
+                                        label = { Text(status, fontSize = 10.sp) }
+                                    )
+                                }
+                            }
+                        }
+
+                        // SIGNATURE CHAT ACCENT COLOR PICKER
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = "SIGNATURE CHAT BUBBLE ACCENT",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = WhatsAppSubtleText
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            val signatureColors = listOf(
+                                Pair("#25D366", "Emerald"),
+                                Pair("#00E5FF", "Cyber Cyan"),
+                                Pair("#FF007F", "Neon Pink"),
+                                Pair("#B388FF", "Electric Violet"),
+                                Pair("#FFB300", "Sunset Amber")
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                signatureColors.forEach { (hex, name) ->
+                                    val color = Color(android.graphics.Color.parseColor(hex))
+                                    val isSelected = profileSignatureColorHex.equals(hex, ignoreCase = true)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(CircleShape)
+                                            .background(color)
+                                            .border(
+                                                width = if (isSelected) 3.dp else 1.dp,
+                                                color = if (isSelected) Color.White else Color.Transparent,
+                                                shape = CircleShape
+                                            )
+                                            .clickable { profileSignatureColorHex = hex },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (isSelected) {
+                                            Icon(Icons.Default.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // INSTANT QR CODE IDENTITY SHARING BUTTON
+                        OutlinedButton(
+                            onClick = { showMyQrDialog = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF00E5FF)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF))
+                        ) {
+                            Icon(Icons.Default.QrCode, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Show Personal Mesh Identity QR Code", fontWeight = FontWeight.Bold)
+                        }
 
                         // Profile Mode Selection (WhatsApp Permanent vs Instagram/Guest Temporary)
                         Text(
@@ -847,17 +1493,47 @@ fun MainChatScreen(
                             }
                         }
 
+                        // EMERGENCY ICE (IN CASE OF EMERGENCY) DETAILS
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF261212)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, Color(0xFFE53935).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFFF5252), modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("OFFLINE ICE (EMERGENCY MEDICAL & CONTACT)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFF5252))
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                OutlinedTextField(
+                                    value = profileIceNotesInput,
+                                    onValueChange = { profileIceNotesInput = it },
+                                    placeholder = { Text("Blood Type, Emergency phone, allergies...", fontSize = 11.sp, color = Color.Gray) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = Color(0xFFFF5252),
+                                        unfocusedBorderColor = Color.Transparent
+                                    )
+                                )
+                            }
+                        }
+
                         // Live Chat Preview Card
+                        val sigColor = try { Color(android.graphics.Color.parseColor(profileSignatureColorHex)) } catch(e: Exception) { WhatsAppGreen }
                         Card(
                             colors = CardDefaults.cardColors(containerColor = WhatsAppChatBackgroundDark),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .border(1.dp, Color(0xFF1F2C34), RoundedCornerShape(12.dp))
+                                .border(1.dp, sigColor.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
                         ) {
                             Column(modifier = Modifier.padding(10.dp)) {
                                 Text(
-                                    "LIVE CHAT PREVIEW",
+                                    "LIVE CHAT PREVIEW (SIGNATURE ACCENT)",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = WhatsAppSubtleText,
                                     fontSize = 10.sp,
@@ -867,6 +1543,7 @@ fun MainChatScreen(
                                 Surface(
                                     color = WhatsAppOutgoingDark,
                                     shape = RoundedCornerShape(topStart = 14.dp, topEnd = 2.dp, bottomStart = 14.dp, bottomEnd = 14.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, sigColor.copy(alpha = 0.6f)),
                                     modifier = Modifier.align(Alignment.End)
                                 ) {
                                     Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
@@ -875,7 +1552,7 @@ fun MainChatScreen(
                                                 text = if (profileNameInput.isNotBlank()) profileNameInput else "Me",
                                                 style = MaterialTheme.typography.labelMedium,
                                                 fontWeight = FontWeight.Bold,
-                                                color = WhatsAppGreen
+                                                color = sigColor
                                             )
                                             Spacer(modifier = Modifier.width(4.dp))
                                             Text(
@@ -911,21 +1588,26 @@ fun MainChatScreen(
                     }
                 },
                 confirmButton = {
+                    val sigColor = try { Color(android.graphics.Color.parseColor(profileSignatureColorHex)) } catch(e: Exception) { WhatsAppGreen }
                     Button(
                         onClick = {
                             if (profileNameInput.isNotBlank()) {
-                                viewModel.updateUserName(
+                                viewModel.updateFullProfile(
                                     newName = profileNameInput.trim(),
                                     newUsernameId = profileUsernameIdInput.trim(),
+                                    avatarPreset = profileAvatarPreset,
+                                    statusBio = profileStatusBioInput.trim(),
+                                    signatureColorHex = profileSignatureColorHex,
+                                    iceNotes = profileIceNotesInput.trim(),
                                     isPermanent = profileIsPermanent
                                 )
                             }
                             viewModel.setGhostMode(profileIsGhost)
                             showProfileDialog = false
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = WhatsAppGreen)
+                        colors = ButtonDefaults.buttonColors(containerColor = sigColor)
                     ) {
-                        Text("Save & Apply", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text("Save & Apply", color = Color.Black, fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {
@@ -933,19 +1615,110 @@ fun MainChatScreen(
                 }
             )
         }
+
+        // OFFLINE PERSONAL MESH IDENTITY QR CODE MODAL
+        if (showMyQrDialog) {
+            AlertDialog(
+                onDismissRequest = { showMyQrDialog = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.QrCode, contentDescription = null, tint = Color(0xFF00E5FF))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Personal Mesh Identity QR", fontWeight = FontWeight.Bold)
+                    }
+                },
+                text = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Scan to add $profileNameInput ($profileUsernameIdInput) to mesh contacts offline.",
+                            fontSize = 12.sp,
+                            color = WhatsAppSubtleText,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        val myQrContent = "aether://node/${com.aetherweb.app.MeshNetworkManager.localNodeId}?name=${profileNameInput.replace(" ", "%20")}&handle=${profileUsernameIdInput}&ip=${uiState.hotspotIp}"
+                        Box(
+                            modifier = Modifier
+                                .size(210.dp)
+                                .background(Color.White, RoundedCornerShape(12.dp))
+                                .padding(10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            com.aetherweb.app.QRCodeImage(
+                                content = myQrContent,
+                                modifier = Modifier.size(190.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Node ID: #${com.aetherweb.app.MeshNetworkManager.localNodeId.take(12).uppercase()}",
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            color = Color(0xFF53BDEB)
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { showMyQrDialog = false },
+                        colors = ButtonDefaults.buttonColors(containerColor = WhatsAppGreen)
+                    ) {
+                        Text("Done", color = Color.White)
+                    }
+                }
+            )
+        }
         
         if (showRosterDialog) {
+            val totalMembers = 1 + uiState.connectedNodes.size + uiState.approvedSpectators.size
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = { showRosterDialog = false },
-                title = { Text("Room Roster") },
+                title = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Room Roster ($totalMembers)", fontWeight = FontWeight.Bold)
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (uiState.isRoomSealed) Color(0xFFB71C1C).copy(alpha = 0.25f) else Color(0xFF25D366).copy(alpha = 0.15f),
+                            border = BorderStroke(1.dp, if (uiState.isRoomSealed) Color(0xFFFF5252) else WhatsAppGreen),
+                            modifier = Modifier.clickable {
+                                showRosterDialog = false
+                                showRoomCapacityDialog = true
+                            }
+                        ) {
+                            Text(
+                                text = if (uiState.isRoomSealed) "🔒 SEALED" else "Cap: ${if (uiState.roomCapacityLimit > 0) uiState.roomCapacityLimit else "∞"}",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = if (uiState.isRoomSealed) Color(0xFFFF8A80) else WhatsAppGreen
+                            )
+                        }
+                    }
+                },
                 text = {
-                    LazyColumn {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        // Host
+                        item {
+                            ListItem(
+                                headlineContent = { Text("${uiState.localUserName} (You)", fontWeight = FontWeight.Bold) },
+                                supportingContent = { Text("${uiState.localUsernameId} • Host Phone 👑", color = WhatsAppGreen, style = MaterialTheme.typography.labelSmall) },
+                                leadingContent = { Icon(Icons.Default.Person, contentDescription = null, tint = WhatsAppGreen) }
+                            )
+                        }
+
+                        // App nodes
                         items(uiState.connectedNodes.filter { it.name.isNotBlank() }) { node ->
                             val displayName = uiState.knownUsers[node.id] ?: node.name
                             val handle = uiState.knownUserIds[node.id] ?: "@${node.name.lowercase().replace(" ", "")}"
                             ListItem(
                                 headlineContent = { Text(displayName, fontWeight = FontWeight.SemiBold) },
-                                supportingContent = { Text(handle, color = Color(0xFF25D366), style = MaterialTheme.typography.labelSmall) },
+                                supportingContent = { Text("$handle • Mesh App Node", color = Color(0xFF53BDEB), style = MaterialTheme.typography.labelSmall) },
                                 leadingContent = {
                                     Box(
                                         modifier = Modifier.size(12.dp).background(Color(0xFF25D366), shape = androidx.compose.foundation.shape.CircleShape)
@@ -953,43 +1726,56 @@ fun MainChatScreen(
                                 },
                                 trailingContent = {
                                     Row(horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                                        androidx.compose.material3.IconButton(onClick = {
+                                        IconButton(onClick = {
                                             viewModel.setDmPeer(node.id)
                                             showRosterDialog = false
                                         }) {
-                                            androidx.compose.material3.Icon(
-                                                androidx.compose.material.icons.Icons.Default.Lock,
+                                            Icon(
+                                                Icons.Default.Lock,
                                                 contentDescription = "Direct Message",
                                                 tint = Color(0xFF53BDEB)
                                             )
                                         }
 
-                                        androidx.compose.material3.IconButton(onClick = {
+                                        IconButton(onClick = {
                                             com.aetherweb.app.CallManager.initiateCall(node.id, displayName) { payload ->
                                                 com.aetherweb.app.MeshNetworkManager.meshRouter.routeLocalMessage(payload)
                                                 com.aetherweb.app.MeshNetworkManager.webServerManager?.broadcastMessage(payload, com.aetherweb.app.MeshNetworkManager.localNodeId)
                                             }
                                         }) {
-                                            androidx.compose.material3.Icon(
-                                                androidx.compose.material.icons.Icons.Default.Call,
+                                            Icon(
+                                                Icons.Default.Call,
                                                 contentDescription = "Voice Call",
-                                                tint = androidx.compose.ui.graphics.Color(0xFF25D366)
+                                                tint = Color(0xFF25D366)
                                             )
                                         }
 
                                         if (uiState.isHotspotActive) {
-                                            androidx.compose.material3.TextButton(onClick = {
-                                                viewModel.kickUser(node.id)
-                                                android.widget.Toast.makeText(context, "${node.name} kicked", android.widget.Toast.LENGTH_SHORT).show()
+                                            TextButton(onClick = {
+                                                viewModel.kickParticipant(node.id, displayName)
+                                                android.widget.Toast.makeText(context, "$displayName removed", android.widget.Toast.LENGTH_SHORT).show()
                                             }) {
                                                 Text("Kick", color = MaterialTheme.colorScheme.error)
                                             }
-                                            androidx.compose.material3.TextButton(onClick = {
-                                                viewModel.banUser(node.id)
-                                                android.widget.Toast.makeText(context, "${node.name} banned", android.widget.Toast.LENGTH_SHORT).show()
-                                            }) {
-                                                Text("Ban", color = MaterialTheme.colorScheme.error)
-                                            }
+                                        }
+                                    }
+                                }
+                            )
+                        }
+
+                        // Web guests
+                        items(uiState.approvedSpectators) { guestIp ->
+                            ListItem(
+                                headlineContent = { Text("Web Guest ($guestIp)", fontWeight = FontWeight.SemiBold) },
+                                supportingContent = { Text("Browser WebChat Session 🌐", color = Color(0xFFFF9800), style = MaterialTheme.typography.labelSmall) },
+                                leadingContent = { Icon(Icons.Default.Language, contentDescription = null, tint = Color(0xFFFF9800)) },
+                                trailingContent = {
+                                    if (uiState.isHotspotActive) {
+                                        TextButton(onClick = {
+                                            viewModel.kickParticipant(guestIp, "Web Guest $guestIp")
+                                            android.widget.Toast.makeText(context, "Guest $guestIp removed", android.widget.Toast.LENGTH_SHORT).show()
+                                        }) {
+                                            Text("Kick", color = MaterialTheme.colorScheme.error)
                                         }
                                     }
                                 }
@@ -998,7 +1784,15 @@ fun MainChatScreen(
                     }
                 },
                 confirmButton = {
-                    Button(onClick = { showRosterDialog = false }) { Text("Close") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = {
+                            showRosterDialog = false
+                            showRoomCapacityDialog = true
+                        }) {
+                            Text("Capacity Settings", color = WhatsAppGreen, fontWeight = FontWeight.Bold)
+                        }
+                        Button(onClick = { showRosterDialog = false }) { Text("Close") }
+                    }
                 }
             )
         }
@@ -1501,10 +2295,69 @@ fun MainChatScreen(
                                 }
                             } else {
                                 TextButton(
-                                    onClick = { viewModel.toggleHotspot(isPrivate = false) },
+                                    onClick = {
+                                        showRoomSetupDialog = true
+                                    },
                                     colors = ButtonDefaults.textButtonColors(contentColor = WhatsAppGreen)
                                 ) {
                                     Text("Start", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.height(10.dp))
+
+                        // Capacity & Anti-Infiltration Status Card
+                        val totalMembers = 1 + uiState.connectedNodes.size + uiState.approvedSpectators.size
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showRoomCapacityDialog = true },
+                            colors = CardDefaults.cardColors(
+                                containerColor = when {
+                                    uiState.isRoomSealed -> Color(0xFFB71C1C).copy(alpha = 0.25f)
+                                    uiState.roomCapacityLimit in 1..totalMembers -> Color(0xFFFF9800).copy(alpha = 0.25f)
+                                    else -> MaterialTheme.colorScheme.surfaceVariant
+                                }
+                            ),
+                            border = BorderStroke(
+                                1.dp,
+                                when {
+                                    uiState.isRoomSealed -> Color(0xFFFF5252)
+                                    uiState.roomCapacityLimit in 1..totalMembers -> Color(0xFFFFB74D)
+                                    else -> WhatsAppGreen.copy(alpha = 0.5f)
+                                }
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                    Icon(
+                                        if (uiState.isRoomSealed) Icons.Default.Lock else Icons.Default.Security,
+                                        contentDescription = null,
+                                        tint = if (uiState.isRoomSealed) Color(0xFFFF5252) else WhatsAppGreen
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = if (uiState.isRoomSealed) "🔒 Room Sealed & Locked ($totalMembers/${if (uiState.roomCapacityLimit > 0) uiState.roomCapacityLimit else "∞"})"
+                                                   else "🛡️ Capacity Limit: $totalMembers/${if (uiState.roomCapacityLimit > 0) uiState.roomCapacityLimit else "Unlimited"} Members",
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = if (uiState.isRoomSealed) "No new devices can join or spy on this session"
+                                                   else if (uiState.autoLockWhenFull) "Auto-locks door once limit reached"
+                                                   else "Tap to adjust limit or seal room",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                TextButton(onClick = { showRoomCapacityDialog = true }) {
+                                    Text("Configure", color = WhatsAppGreen, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -1574,14 +2427,27 @@ fun MainChatScreen(
                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f))
                                 ) {
                                     Column(modifier = Modifier.padding(14.dp)) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Default.BluetoothSearching, contentDescription = null, tint = WhatsAppGreen)
-                                            Spacer(Modifier.width(8.dp))
-                                            Text("Auto-Connect via BLE (Zero Typing)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                                Icon(Icons.Default.BluetoothSearching, contentDescription = null, tint = WhatsAppGreen)
+                                                Spacer(Modifier.width(8.dp))
+                                                Text("Auto-Share via BLE", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                                            }
+                                            Switch(
+                                                checked = uiState.autoShareHotspotOverBle,
+                                                onCheckedChange = { viewModel.toggleAutoShareHotspotOverBle(it) }
+                                            )
                                         }
                                         Spacer(Modifier.height(4.dp))
                                         Text(
-                                            "Nearby Android phones with Nexus installed auto-detect this broadcast and join Wi-Fi without typing passwords.",
+                                            if (uiState.autoShareHotspotOverBle)
+                                                "Active: Broadcasting Wi-Fi credentials over BLE. Nearby APK phones auto-detect and connect without typing passwords."
+                                            else
+                                                "Privacy Protected: BLE password broadcast is OFF. Only users who scan the QR or enter credentials manually can join.",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -1590,22 +2456,23 @@ fun MainChatScreen(
                                             Button(
                                                 onClick = {
                                                     viewModel.pulseAllBleHotspotCredentials()
-                                                    android.widget.Toast.makeText(context, "Pulsing Wi-Fi credentials over BLE...", android.widget.Toast.LENGTH_SHORT).show()
+                                                    android.widget.Toast.makeText(context, "Pulsed Wi-Fi credentials over BLE!", android.widget.Toast.LENGTH_SHORT).show()
                                                 },
                                                 modifier = Modifier.weight(1f)
                                             ) {
                                                 Icon(Icons.Default.Sensors, contentDescription = null, modifier = Modifier.size(16.dp))
-                                                Spacer(Modifier.width(6.dp))
-                                                Text("Auto-Pulse BLE")
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("Pulse BLE Now")
                                             }
-                                            OutlinedButton(
+                                            FilledTonalButton(
                                                 onClick = {
-                                                    viewModel.pulseBleChunk("S:" + uiState.hotspotSsid)
-                                                    android.widget.Toast.makeText(context, "Pulsed SSID", android.widget.Toast.LENGTH_SHORT).show()
+                                                    viewModel.shareHotspotToChatAndPin()
+                                                    android.widget.Toast.makeText(context, "Posted & Pinned Wi-Fi info in chat!", android.widget.Toast.LENGTH_SHORT).show()
+                                                    showHotspotDialog = false
                                                 },
                                                 modifier = Modifier.weight(1f)
                                             ) {
-                                                Text("Pulse SSID")
+                                                Text("📌 Pin to Chat")
                                             }
                                         }
                                     }
@@ -1622,7 +2489,7 @@ fun MainChatScreen(
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Icon(Icons.Default.Wifi, contentDescription = null, tint = WhatsAppGreen)
                                             Spacer(Modifier.width(8.dp))
-                                            Text("Manual Wi-Fi Credentials", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                                            Text("Hotspot Credentials & Fallback", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
                                         }
                                         Spacer(Modifier.height(10.dp))
                                         Row(
@@ -1630,7 +2497,7 @@ fun MainChatScreen(
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Column {
+                                            Column(modifier = Modifier.weight(1f)) {
                                                 Text("Network (SSID)", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                                                 Text(uiState.hotspotSsid, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                                             }
@@ -1647,7 +2514,7 @@ fun MainChatScreen(
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Column {
+                                            Column(modifier = Modifier.weight(1f)) {
                                                 Text("Password", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                                                 Text(uiState.hotspotPassword, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                                             }
@@ -1658,15 +2525,56 @@ fun MainChatScreen(
                                                 }
                                             ) { Text("Copy Pwd") }
                                         }
+                                        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                                        val portalUrl = "http://${uiState.hotspotIp.ifEmpty { "192.168.49.1" }}:8080"
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text("Web Portal URL", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                                Text(portalUrl, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                                            }
+                                            OutlinedButton(
+                                                onClick = {
+                                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Web Portal URL", portalUrl))
+                                                    android.widget.Toast.makeText(context, "Portal URL Copied", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                            ) { Text("Copy URL") }
+                                        }
                                         Spacer(Modifier.height(12.dp))
-                                        Button(
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Button(
+                                                onClick = {
+                                                    viewModel.copyHotspotInfoToClipboard(context)
+                                                },
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                                Spacer(Modifier.width(6.dp))
+                                                Text("Copy All Info")
+                                            }
+                                            OutlinedButton(
+                                                onClick = {
+                                                    viewModel.shareHotspotToChatAndPin()
+                                                    android.widget.Toast.makeText(context, "Posted & Pinned Wi-Fi info in chat!", android.widget.Toast.LENGTH_SHORT).show()
+                                                    showHotspotDialog = false
+                                                },
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Text("Share & Pin")
+                                            }
+                                        }
+                                        Spacer(Modifier.height(8.dp))
+                                        OutlinedButton(
                                             onClick = {
                                                 val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                                                     type = "text/plain"
                                                     putExtra(android.content.Intent.EXTRA_SUBJECT, "Nexus Mesh Wi-Fi Access")
                                                     putExtra(
                                                         android.content.Intent.EXTRA_TEXT,
-                                                        "Nexus Offline Mesh Wi-Fi Connection:\n\n• Network (SSID): ${uiState.hotspotSsid}\n• Password: ${uiState.hotspotPassword}\n\nConnect to this Wi-Fi to chat and share files offline!"
+                                                        "Nexus Offline Mesh Wi-Fi Connection:\n\n• Network (SSID): ${uiState.hotspotSsid}\n• Password: ${uiState.hotspotPassword}\n• Web Portal: http://${uiState.hotspotIp.ifEmpty { "192.168.49.1" }}:8080\n\nConnect to this Wi-Fi to chat and share files offline!"
                                                     )
                                                 }
                                                 context.startActivity(android.content.Intent.createChooser(shareIntent, "Share Wi-Fi Credentials"))
@@ -1675,7 +2583,7 @@ fun MainChatScreen(
                                         ) {
                                             Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(Modifier.width(8.dp))
-                                            Text("Share Wi-Fi Info (Apps / SMS)")
+                                            Text("Share via Apps / SMS")
                                         }
                                     }
                                 }
@@ -1767,10 +2675,44 @@ fun MainChatScreen(
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                             )
 
-                            Spacer(Modifier.height(12.dp))
+                            Spacer(Modifier.height(6.dp))
+
+                            // 🔒 E2EE Privacy Shield Badge
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = Color(0xFF00E676).copy(alpha = 0.15f),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E676)),
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Security,
+                                        contentDescription = "Shield",
+                                        tint = Color(0xFF00E676),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        "End-to-End Encrypted (AES-256-GCM)",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Color(0xFF00E676),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            Spacer(Modifier.height(8.dp))
 
                             if (uiState.hotspotIp.isNotEmpty()) {
-                                val url = "http://${uiState.hotspotIp}:8080"
+                                val baseUrl = "http://${uiState.hotspotIp}:8080"
+                                val qrUrl = if (uiState.webSessionKeyHex.isNotEmpty()) {
+                                    "http://${uiState.hotspotIp}:8080/#key=${uiState.webSessionKeyHex}&salt=${uiState.webSessionSaltHex}"
+                                } else {
+                                    baseUrl
+                                }
 
                                 // WebChat QR Code Box
                                 Card(
@@ -1780,16 +2722,117 @@ fun MainChatScreen(
                                     modifier = Modifier.padding(8.dp)
                                 ) {
                                     com.aetherweb.app.QRCodeImage(
-                                        content = url,
+                                        content = qrUrl,
                                         modifier = Modifier.size(220.dp).padding(12.dp)
                                     )
                                 }
 
-                                Spacer(Modifier.height(16.dp))
+                                Spacer(Modifier.height(10.dp))
+
+                                // Host Room PIN Card (for manual browser IP entry)
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Icon(Icons.Default.Lock, contentDescription = null, tint = WhatsAppGreen, modifier = Modifier.size(18.dp))
+                                                Text("Host Room PIN", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                                            }
+                                            IconButton(
+                                                onClick = { viewModel.regenerateWebSecurityKeys() },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(Icons.Default.Refresh, contentDescription = "Regenerate Keys", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                                            }
+                                        }
+                                        Spacer(Modifier.height(6.dp))
+                                        val formattedPin = if (uiState.webSessionPin.length == 6) {
+                                            "${uiState.webSessionPin.take(3)} - ${uiState.webSessionPin.takeLast(3)}"
+                                        } else {
+                                            uiState.webSessionPin.ifEmpty { "842 - 195" }
+                                        }
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                formattedPin,
+                                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                                style = MaterialTheme.typography.headlineSmall,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = WhatsAppGreen
+                                            )
+                                            OutlinedButton(
+                                                onClick = {
+                                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Host PIN", uiState.webSessionPin))
+                                                    android.widget.Toast.makeText(context, "PIN Copied", android.widget.Toast.LENGTH_SHORT).show()
+                                                },
+                                                modifier = Modifier.height(36.dp)
+                                            ) {
+                                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("Copy PIN", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            "Enter this PIN if typing IP manually into browser without scanning QR.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        if (uiState.webSessionFingerprint.isNotEmpty()) {
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(
+                                                "Fingerprint: ${uiState.webSessionFingerprint}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                                color = Color.Gray
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Zero-Trace / Ghost Mode Switch Card
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                                    colors = CardDefaults.cardColors(containerColor = if (uiState.isGhostMode) Color(0xFF673AB7).copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                Text(if (uiState.isGhostMode) "👻 Zero-Trace Active" else "👻 Zero-Trace Ephemeral Mode", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                            }
+                                            Text(
+                                                "RAM-only mode: No messages written to SQLite database.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Switch(
+                                            checked = uiState.isGhostMode,
+                                            onCheckedChange = { viewModel.setGhostMode(it) }
+                                        )
+                                    }
+                                }
+
+                                Spacer(Modifier.height(8.dp))
 
                                 // WebChat Portal Links
                                 Card(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                                 ) {
                                     Column(modifier = Modifier.padding(14.dp)) {
@@ -1799,12 +2842,12 @@ fun MainChatScreen(
                                         Text("http://nexus.run", fontWeight = FontWeight.Bold, color = WhatsAppGreen, style = MaterialTheme.typography.titleMedium)
                                         Spacer(Modifier.height(6.dp))
                                         Text("Direct IP Link:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                                        Text(url, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                        Text(baseUrl, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                                         Spacer(Modifier.height(12.dp))
                                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             OutlinedButton(
                                                 onClick = {
-                                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("WebChat URL", url))
+                                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("WebChat URL", baseUrl))
                                                     android.widget.Toast.makeText(context, "URL Copied to clipboard", android.widget.Toast.LENGTH_SHORT).show()
                                                 },
                                                 modifier = Modifier.weight(1f)
@@ -1820,7 +2863,7 @@ fun MainChatScreen(
                                                         putExtra(android.content.Intent.EXTRA_SUBJECT, "Join Nexus Offline WebChat")
                                                         putExtra(
                                                             android.content.Intent.EXTRA_TEXT,
-                                                            "Join Nexus Offline WebChat:\n1. Connect to Wi-Fi '${uiState.hotspotSsid}'\n2. Open your browser and go to http://nexus.run or $url\n\nNo installation required!"
+                                                            "Join Nexus Offline Encrypted WebChat:\n1. Connect to Wi-Fi '${uiState.hotspotSsid}'\n2. Open your browser and go to http://nexus.run or $baseUrl\n3. Enter Room PIN: ${uiState.webSessionPin}\n\nE2EE Protected • No installation required!"
                                                         )
                                                     }
                                                     context.startActivity(android.content.Intent.createChooser(shareIntent, "Share WebChat Link"))
@@ -2753,6 +3796,14 @@ fun MainChatScreen(
                 }
             )
         }
+
+        // Truth & Dare Live Mesh Alert Overlay
+        if (uiState.activeRandomizer != null) {
+            com.aetherweb.app.ui.screens.RandomizerOverlay(
+                randomizer = uiState.activeRandomizer!!,
+                onClose = { viewModel.dismissRandomizer() }
+            )
+        }
     }
 }
 
@@ -2840,6 +3891,101 @@ fun ChatTab(
             .fillMaxSize()
             .background(WhatsAppChatBackgroundDark)
     ) {
+        // --- Pinned Hotspot Banner ---
+        if (uiState.pinnedHotspot != null) {
+            val pinned = uiState.pinnedHotspot!!
+            val context = androidx.compose.ui.platform.LocalContext.current
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f)),
+                shape = RoundedCornerShape(14.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("📌", fontSize = 16.sp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "PINNED: Mesh Hotspot & Web Portal",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                        IconButton(
+                            onClick = { viewModel.unpinHotspot() },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Unpin", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f))
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "• Network: ${pinned.ssid}\n• Password: ${if (pinned.password.isNotBlank() && pinned.password != "PRIVATE") pinned.password else "[Private Room]"}\n• Web: http://${pinned.ip}:8080",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                val fullText = "Wi-Fi Network: ${pinned.ssid}\nPassword: ${pinned.password}\nWeb Portal: http://${pinned.ip}:8080"
+                                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Hotspot Info", fullText))
+                                android.widget.Toast.makeText(context, "Copied Hotspot details!", android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Copy Info", fontSize = 12.sp)
+                        }
+
+                        if (!uiState.isHotspotActive && !uiState.isWifiConnected) {
+                            Button(
+                                onClick = {
+                                    viewModel.connectToDiscoveredHotspot(passwordOverride = if (pinned.password != "PRIVATE") pinned.password else null)
+                                    android.widget.Toast.makeText(context, "Connecting to ${pinned.ssid}...", android.widget.Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(Icons.Default.Wifi, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Connect", fontSize = 12.sp)
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = {
+                                    val portalIntent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("http://${pinned.ip}:8080"))
+                                    try {
+                                        context.startActivity(portalIntent)
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(context, "Cannot open browser", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text("Open Web", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (uiState.discoveredHostSsid != null && !uiState.isHotspotActive && !uiState.isWifiConnected) {
             val context = androidx.compose.ui.platform.LocalContext.current
             Card(
@@ -3155,9 +4301,51 @@ fun ChatTab(
             }
             if (chronList.isNotEmpty()) {
                 item {
-                    val pillLabel = if (uiState.activeDmPeerId != null) "🔒 Private 1-on-1 Direct Chat" else "Mesh Chat Room • End-to-End Local"
+                    val pillLabel = if (uiState.activeDmPeerId != null) "🔒 Private 1-on-1 Direct Chat" else "🔒 End-to-End Encrypted Mesh • Zero Cloud"
                     WhatsAppDatePill(pillLabel)
                     Spacer(modifier = Modifier.height(10.dp))
+                }
+            } else {
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 32.dp, horizontal = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color(0xFF1F2C34),
+                            modifier = Modifier.size(56.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Default.Security,
+                                    contentDescription = null,
+                                    tint = WhatsAppGreen,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = if (uiState.activeDmPeerId != null) "Direct Encrypted Chat" else "Offline Mesh Room",
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFE9EDEF),
+                            fontSize = 15.sp
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = if (uiState.activeDmPeerId != null)
+                                "Messages are cryptographically encrypted with ECDH and sent directly to this peer over local mesh radios."
+                            else
+                                "Messages transmit directly over BLE & local Wi-Fi without internet or phone towers. Anyone nearby will automatically sync.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = WhatsAppSubtleText,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            lineHeight = 16.sp
+                        )
+                    }
                 }
             }
             itemsIndexed(
@@ -3238,6 +4426,8 @@ fun ChatTab(
             },
             onFilePick = { fileLauncher.launch("*/*") },
             onPollClick = { showPollBuilder = true },
+            onIdeClick = if (!uiState.isLiteMode && BuildConfig.FLAVOR != "lite") { { viewModel.setSharedMedia("ide", "", "local", 0) } } else null,
+            onTruthDareClick = if (!uiState.isLiteMode && BuildConfig.FLAVOR != "lite") { { viewModel.setSharedMedia("truthdare", "", "collaborative", 0) } } else null,
             onCameraClick = {
                 photoPicker.launch(
                     androidx.activity.result.PickVisualMediaRequest(
@@ -3388,7 +4578,7 @@ fun ArcadeTab(uiState: MeshState, viewModel: MeshViewModel) {
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable {
-                    viewModel.updateLocalSharedMedia("web", "http://$ip:8080/ide", com.aetherweb.app.MeshNetworkManager.localNodeId, "local", 0, true)
+                    viewModel.setSharedMedia("ide", "", "local", 0)
                 },
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF131C21)),
@@ -3413,7 +4603,7 @@ fun ArcadeTab(uiState: MeshState, viewModel: MeshViewModel) {
                         color = Color.White
                     )
                     Text(
-                        "Write HTML, JS & Python together — runs fully offline, no internet needed",
+                        "Native editor with live HTML webview, JS/Python consoles & mesh script distribution",
                         fontSize = 11.sp,
                         color = Color(0xFF8696A0)
                     )
@@ -3517,7 +4707,7 @@ fun ArcadeTab(uiState: MeshState, viewModel: MeshViewModel) {
                 badge = "Icebreaker",
                 accentColor = Color(0xFFEAB308),
                 modifier = Modifier.weight(1f),
-                onClick = { viewModel.rollRandomizer() }
+                onClick = { viewModel.setSharedMedia("truthdare", "", "collaborative", 0) }
             )
         }
 

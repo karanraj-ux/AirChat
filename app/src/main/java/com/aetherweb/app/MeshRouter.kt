@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 class MeshRouter(private var localNodeId: String, private val cryptoManager: CryptoManager = CryptoManager()) {
     var localNodeName: String = ""
+    var onPacketRouted: (() -> Unit)? = null
 
     companion object {
         /** bitchat parity: maximum flood hops (MESSAGE_TTL_HOPS = 7). */
@@ -262,6 +263,7 @@ class MeshRouter(private var localNodeId: String, private val cryptoManager: Cry
             GlobalScope.launch {
                 delay(java.util.concurrent.ThreadLocalRandom.current().nextLong(8, 27))
                 _outboundBroadcasts.tryEmit(rebroadcastMessage)
+                onPacketRouted?.invoke()
             }
         } else {
             Log.d("MeshRouter", "Message ${message.messageId} not relayed (TTL=$newTtl).")
@@ -353,14 +355,20 @@ class MeshRouter(private var localNodeId: String, private val cryptoManager: Cry
             Log.i("MeshRouter", "Routing local message for broadcast: $messageId (nonce: $nonce)")
             DiagnosticLogger.log("Message Lifecycle", "Router Processing", "Host phone assigned unique Message ID and signed it: $messageId", EventStatus.SUCCESS)
             _outboundBroadcasts.tryEmit(networkMessage)
+            onPacketRouted?.invoke()
         } catch(e: Exception) {
             Log.e("MeshRouter", "Error sending network message", e)
             DiagnosticLogger.log("Message Lifecycle", "Router Processing", "Failed to process message: ${e.message}", EventStatus.ERROR)
         }
     }
 
+    private var lastCleanupTime = 0L
+
     private fun cleanupCache() {
         val now = System.currentTimeMillis()
+        if (now - lastCleanupTime < 30_000L) return
+        lastCleanupTime = now
+
         synchronized(messageCache) {
             val iterator = messageCache.entries.iterator()
             while (iterator.hasNext()) {

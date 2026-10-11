@@ -104,9 +104,27 @@ object AetherFeedManager {
             else -> "image"
         }
 
+        var localResolvedUri = uri.toString()
+        if (type == "video" && (uri.scheme == "content" || uri.scheme == "file")) {
+            try {
+                val cacheDir = MeshStorageManager.getCacheDir(context)
+                val targetFile = java.io.File(cacheDir, "mesh_video_reel_${System.currentTimeMillis() % 10000}.mp4")
+                cr.openInputStream(uri)?.use { input ->
+                    targetFile.outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+                if (targetFile.exists() && targetFile.length() > 0) {
+                    localResolvedUri = Uri.fromFile(targetFile).toString()
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("AetherFeed", "Failed to cache video for HTTP mesh stream", e)
+            }
+        }
+
         val newPost = FeedPost(
             id = UUID.randomUUID().toString(),
-            mediaUri = uri.toString(),
+            mediaUri = localResolvedUri,
             mediaType = type,
             author = authorName.ifBlank { "You (Local)" },
             authorHandle = authorName.lowercase().replace(" ", "_").ifBlank { "local_host" },

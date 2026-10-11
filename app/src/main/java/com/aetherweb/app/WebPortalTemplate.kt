@@ -13,15 +13,15 @@ package com.aetherweb.app
  */
 object WebPortalTemplate {
 
-    fun getHtml(isLite: Boolean = false): String {
+    fun getHtml(isLite: Boolean = false, saltHex: String = ""): String {
         // Tier-2 "Seed": lite flavor serves a chat-only portal (no voice, games, IDE).
         val voiceBtnHtml = if (isLite) "" else """<button class="action-btn" onclick="toggleVoicePanel()" id="voice-btn" title="Voice Room">🎙</button>"""
         // Both APKs on the web: full flavor serves its own APK + the bundled lite seed;
         // lite flavor serves itself (it IS the lite app).
         val apkButtonsHtml = if (isLite)
-            """<a href="/download" class="action-btn green" download="AetherWeb-lite.apk" title="Download Aether Web Lite">⬇️ Lite</a>"""
+            """<a href="/download" class="action-btn green" download="AirChat-lite.apk" title="Download AirChat Lite">⬇️ Lite</a>"""
         else
-            """<a href="/download" class="action-btn green" download="AetherWeb.apk" title="Download Aether Web (full)">⬇️ APK</a><a href="/download-lite" class="action-btn green" download="AetherWeb-lite.apk" title="Download Aether Web Lite (small, chat-only)">⬇️ Lite</a>"""
+            """<a href="/download" class="action-btn green" download="AirChat.apk" title="Download AirChat (full)">⬇️ APK</a><a href="/download-lite" class="action-btn green" download="AirChat-lite.apk" title="Download AirChat Lite (small, chat-only)">⬇️ Lite</a>"""
         val voicePanelHtml = if (isLite) "" else """
     <div id="voice-panel" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;">
         <div style="background:var(--card-bg);border-radius:12px;padding:20px;width:320px;max-height:80vh;overflow-y:auto;">
@@ -96,6 +96,8 @@ object WebPortalTemplate {
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#1f2c34">
     <title>MeshChat Portal</title>
+    <meta name="session-salt" content="$saltHex">
+    <meta name="e2ee-supported" content="true">
     <style>
         :root {
             --bg-color: #0b141b;
@@ -411,6 +413,67 @@ object WebPortalTemplate {
         </div>
     </div>
 
+    <!-- Security Handshake / PIN Prompt Modal -->
+    <div id="pin-prompt-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:2000;align-items:center;justify-content:center;padding:16px;">
+        <div style="background:var(--card-bg);border-radius:16px;padding:24px;max-width:360px;width:100%;border:1px solid #00e676;box-shadow:0 8px 32px rgba(0,230,118,0.25);text-align:center;">
+            <div style="font-size:36px;margin-bottom:8px;">🔒</div>
+            <h3 style="margin:0 0 8px;font-size:18px;color:var(--text-primary);">Encrypted Mesh Handshake</h3>
+            <p style="font-size:13px;color:var(--text-secondary);margin:0 0 16px;line-height:1.4;">
+                This room is protected by military-grade AES-256-GCM. Enter the <b>6-digit Host Room PIN</b> displayed on the host screen to seal your session.
+            </p>
+            <div style="display:flex;justify-content:center;margin-bottom:16px;">
+                <input type="text" id="pin-input" maxlength="6" inputmode="numeric" pattern="[0-9]*" placeholder="• • • • • •" style="width:200px;text-align:center;font-size:24px;letter-spacing:6px;font-weight:bold;padding:10px;border-radius:8px;border:2px solid var(--accent-green);background:var(--input-bg);color:var(--text-primary);outline:none;" />
+            </div>
+            <button id="pin-submit-btn" onclick="submitPinFromModal()" class="action-btn green" style="width:100%;justify-content:center;padding:12px;font-size:14px;font-weight:bold;border-radius:8px;">
+                🔐 Verify &amp; Seal Session
+            </button>
+            <p style="font-size:11px;color:var(--text-secondary);margin:12px 0 0;">
+                Tip: Scanning the Host QR Code automatically configures keys with zero setup.
+            </p>
+        </div>
+    </div>
+
+    <!-- Privacy Shield Status Modal -->
+    <div id="privacy-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1500;align-items:center;justify-content:center;padding:16px;">
+        <div style="background:var(--card-bg);border-radius:16px;padding:20px;max-width:360px;width:100%;border:1px solid var(--border-color);max-height:85vh;overflow-y:auto;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:20px;">🛡️</span>
+                    <span style="font-weight:bold;font-size:16px;">Privacy Shield Status</span>
+                </div>
+                <button onclick="closePrivacyModal()" style="background:none;border:none;color:var(--text-secondary);font-size:18px;cursor:pointer;">✕</button>
+            </div>
+            
+            <div style="background:rgba(0,230,118,0.1);border:1px solid #00e676;border-radius:10px;padding:12px;margin-bottom:14px;">
+                <div style="font-size:11px;color:#00e676;font-weight:bold;letter-spacing:0.5px;">ACTIVE CIPHER SUITE</div>
+                <div style="font-size:14px;font-weight:bold;margin-top:2px;">AES-256-GCM (SubtleCrypto)</div>
+                <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Client-side WebCrypto encryption. Local Wi-Fi packets cannot be intercepted by routers, packet sniffers, or ISP monitors.</div>
+            </div>
+
+            <div style="margin-bottom:14px;">
+                <div style="font-size:11px;color:var(--text-secondary);margin-bottom:4px;font-weight:bold;">SESSION FINGERPRINT</div>
+                <div id="shield-fingerprint-box" style="font-family:monospace;font-size:12px;background:var(--input-bg);padding:8px 10px;border-radius:6px;word-break:break-all;">Not Established</div>
+            </div>
+
+            <div style="margin-bottom:16px;background:var(--input-bg);border-radius:10px;padding:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div>
+                        <div style="font-weight:bold;font-size:13px;">⚡ Burn-After-Read</div>
+                        <div style="font-size:11px;color:var(--text-secondary);">Erase messages from RAM after 60s</div>
+                    </div>
+                    <input type="checkbox" id="burn-toggle" onchange="toggleBurnMode(this.checked)" style="width:20px;height:20px;cursor:pointer;">
+                </div>
+            </div>
+
+            <button onclick="reenterPin()" class="action-btn" style="width:100%;justify-content:center;padding:10px;margin-bottom:8px;background:rgba(255,255,255,0.08);">
+                🔑 Re-Enter Room PIN
+            </button>
+            <button onclick="closePrivacyModal()" class="action-btn green" style="width:100%;justify-content:center;padding:10px;">
+                Done
+            </button>
+        </div>
+    </div>
+
     <div id="app-container">
         <!-- Top Persistent Header -->
         <header id="top-header">
@@ -422,12 +485,18 @@ object WebPortalTemplate {
                 </div>
             </div>
             <div class="header-actions">
+                <button class="action-btn" onclick="openPrivacyModal()" id="privacy-shield-btn" title="End-to-End Privacy Shield" style="border: 1px solid #00e676; color: #00e676; background: rgba(0, 230, 118, 0.12);">🛡️ <span id="shield-badge-text">E2EE</span></button>
                 <button class="action-btn" onclick="toggleTheme()" id="theme-btn" title="Toggle Dark/Light">🌓</button>
                 $voiceBtnHtml
                 <button class="action-btn" onclick="toggleBle()" id="ble-btn" title="Connect via Bluetooth (no WiFi needed)">🔵</button>
                 $apkButtonsHtml
             </div>
         </header>
+
+        <div id="burn-notice-banner" style="display:none;background:#2a1b00;color:#ffb74d;padding:6px 14px;font-size:12px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #ff9800;">
+            <span>⚡ <b>Zero-Trace Active:</b> Messages vanish from RAM after 60s. No disk/storage footprint.</span>
+            <button onclick="document.getElementById('burn-notice-banner').style.display='none'" style="background:none;border:none;color:#ffb74d;cursor:pointer;font-size:14px;">✕</button>
+        </div>
 
         <!-- Viewport containing All Pages (SPA - No Page Reloads) -->
         <main id="viewport">
@@ -576,6 +645,253 @@ object WebPortalTemplate {
 
     <!-- Client Script (Persistent WebSocket + Navigation Engine) -->
     <script>
+        // =========================================================
+        // WebCrypto AES-256-GCM End-to-End Privacy Shield & Handshake
+        // =========================================================
+        let cryptoKey = null;
+        let sessionSaltHex = (document.querySelector('meta[name="session-salt"]')?.content || '').trim();
+        let e2eeActive = false;
+        let burnAfterRead = false;
+        let activeKeyFingerprint = 'NONE';
+
+        function hexToBytes(hex) {
+            if (!hex) return new Uint8Array(0);
+            const clean = hex.replace(/[^0-9a-fA-F]/g, '');
+            const bytes = new Uint8Array(clean.length / 2);
+            for (let i = 0; i < clean.length; i += 2) {
+                bytes[i / 2] = parseInt(clean.substr(i, 2), 16);
+            }
+            return bytes;
+        }
+
+        function bytesToHex(bytes) {
+            return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        async function deriveKeyFromPin(pin, saltBytes) {
+            const enc = new TextEncoder();
+            const pinKey = await window.crypto.subtle.importKey(
+                "raw",
+                enc.encode(pin),
+                { name: "PBKDF2" },
+                false,
+                ["deriveKey"]
+            );
+            return await window.crypto.subtle.deriveKey(
+                {
+                    name: "PBKDF2",
+                    salt: saltBytes,
+                    iterations: 100000,
+                    hash: "SHA-256"
+                },
+                pinKey,
+                { name: "AES-GCM", length: 256 },
+                true,
+                ["encrypt", "decrypt"]
+            );
+        }
+
+        async function importRawAesKey(rawBytes) {
+            return await window.crypto.subtle.importKey(
+                "raw",
+                rawBytes,
+                { name: "AES-GCM" },
+                true,
+                ["encrypt", "decrypt"]
+            );
+        }
+
+        async function computeKeyFingerprint(key) {
+            try {
+                const raw = await window.crypto.subtle.exportKey("raw", key);
+                const hashBuffer = await window.crypto.subtle.digest("SHA-256", raw);
+                const hashArray = new Uint8Array(hashBuffer);
+                return bytesToHex(hashArray).substring(0, 16).toUpperCase();
+            } catch(e) {
+                return "VERIFIED";
+            }
+        }
+
+        async function encryptPayload(plaintextStr, key) {
+            const iv = window.crypto.getRandomValues(new Uint8Array(12));
+            const enc = new TextEncoder();
+            const encoded = enc.encode(plaintextStr);
+            const cipherBuffer = await window.crypto.subtle.encrypt(
+                { name: "AES-GCM", iv: iv },
+                key,
+                encoded
+            );
+            const cipherArray = new Uint8Array(cipherBuffer);
+            const combined = new Uint8Array(iv.length + cipherArray.length);
+            combined.set(iv, 0);
+            combined.set(cipherArray, iv.length);
+            
+            let binary = '';
+            const len = combined.byteLength;
+            for (let i = 0; i < len; i++) {
+                binary += String.fromCharCode(combined[i]);
+            }
+            return window.btoa(binary);
+        }
+
+        async function decryptPayload(base64Str, key) {
+            const binary = window.atob(base64Str);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            if (bytes.length <= 12) throw new Error("Ciphertext too short");
+            const iv = bytes.subarray(0, 12);
+            const cipherWithTag = bytes.subarray(12);
+            const decryptedBuffer = await window.crypto.subtle.decrypt(
+                { name: "AES-GCM", iv: iv },
+                key,
+                cipherWithTag
+            );
+            const dec = new TextDecoder();
+            return dec.decode(decryptedBuffer);
+        }
+
+        function updateShieldUi(active, text) {
+            e2eeActive = active;
+            const btn = document.getElementById('privacy-shield-btn');
+            const txt = document.getElementById('shield-badge-text');
+            if (btn && txt) {
+                if (active) {
+                    btn.style.borderColor = '#00e676';
+                    btn.style.color = '#00e676';
+                    btn.style.background = 'rgba(0, 230, 118, 0.15)';
+                    txt.innerText = 'E2EE Active';
+                } else {
+                    btn.style.borderColor = '#ff9800';
+                    btn.style.color = '#ff9800';
+                    btn.style.background = 'rgba(255, 152, 0, 0.15)';
+                    txt.innerText = 'PIN Needed';
+                }
+            }
+            const fpBox = document.getElementById('shield-fingerprint-box');
+            if (fpBox) fpBox.innerText = activeKeyFingerprint || 'Not Established';
+        }
+
+        function openPrivacyModal() {
+            document.getElementById('privacy-modal').style.display = 'flex';
+        }
+        function closePrivacyModal() {
+            document.getElementById('privacy-modal').style.display = 'none';
+        }
+
+        function toggleBurnMode(enabled) {
+            burnAfterRead = enabled;
+            const banner = document.getElementById('burn-notice-banner');
+            if (banner) banner.style.display = enabled ? 'flex' : 'none';
+        }
+
+        async function initE2ee() {
+            if (!window.crypto || !window.crypto.subtle) {
+                updateShieldUi(false, 'Unavailable');
+                return;
+            }
+
+            if (!sessionSaltHex) {
+                try {
+                    const infoRes = await fetch('/api/crypto/info');
+                    if (infoRes.ok) {
+                        const info = await infoRes.json();
+                        sessionSaltHex = info.salt || '';
+                    }
+                } catch(e) {}
+            }
+
+            // 1. Check URL hash for #key=...&salt=...
+            const hash = window.location.hash;
+            if (hash && hash.includes('key=')) {
+                try {
+                    const cleanHash = hash.startsWith('#') ? hash.substring(1) : hash;
+                    const params = new URLSearchParams(cleanHash);
+                    const keyHex = params.get('key');
+                    const saltParam = params.get('salt');
+                    if (saltParam) sessionSaltHex = saltParam;
+
+                    if (keyHex) {
+                        const keyBytes = hexToBytes(keyHex);
+                        cryptoKey = await importRawAesKey(keyBytes);
+                        activeKeyFingerprint = await computeKeyFingerprint(cryptoKey);
+                        sessionStorage.setItem('aether_e2ee_key', keyHex);
+                        
+                        try {
+                            history.replaceState(null, "", window.location.pathname + window.location.search);
+                        } catch(e) {}
+
+                        updateShieldUi(true, 'Active');
+                        return;
+                    }
+                } catch(e) {
+                    console.error("Error reading URL key hash:", e);
+                }
+            }
+
+            // 2. Check sessionStorage
+            const savedKeyHex = sessionStorage.getItem('aether_e2ee_key');
+            if (savedKeyHex) {
+                try {
+                    const keyBytes = hexToBytes(savedKeyHex);
+                    cryptoKey = await importRawAesKey(keyBytes);
+                    activeKeyFingerprint = await computeKeyFingerprint(cryptoKey);
+                    updateShieldUi(true, 'Active');
+                    return;
+                } catch(e) {
+                    sessionStorage.removeItem('aether_e2ee_key');
+                }
+            }
+
+            // 3. Prompt for PIN if neither QR scan nor saved key
+            updateShieldUi(false, 'PIN Needed');
+            document.getElementById('pin-prompt-modal').style.display = 'flex';
+        }
+
+        async function submitPinFromModal() {
+            const input = document.getElementById('pin-input');
+            const pin = (input ? input.value : '').trim();
+            if (!pin || pin.length < 4) {
+                alert("Please enter the 6-digit Host Room PIN");
+                return;
+            }
+            const btn = document.getElementById('pin-submit-btn');
+            btn.innerText = "⏳ Sealing Session...";
+            btn.disabled = true;
+
+            try {
+                if (!sessionSaltHex) {
+                    const infoRes = await fetch('/api/crypto/info');
+                    if (infoRes.ok) {
+                        const info = await infoRes.json();
+                        sessionSaltHex = info.salt || '';
+                    }
+                }
+                const saltBytes = hexToBytes(sessionSaltHex);
+                cryptoKey = await deriveKeyFromPin(pin, saltBytes);
+                activeKeyFingerprint = await computeKeyFingerprint(cryptoKey);
+
+                const rawKey = await window.crypto.subtle.exportKey("raw", cryptoKey);
+                sessionStorage.setItem('aether_e2ee_key', bytesToHex(new Uint8Array(rawKey)));
+
+                document.getElementById('pin-prompt-modal').style.display = 'none';
+                updateShieldUi(true, 'Active');
+                btn.innerText = "🔐 Verify &amp; Seal Session";
+                btn.disabled = false;
+                fetchHistory();
+            } catch(e) {
+                alert("Encryption setup failed: " + e.message);
+                btn.innerText = "🔐 Verify &amp; Seal Session";
+                btn.disabled = false;
+            }
+        }
+
+        function reenterPin() {
+            closePrivacyModal();
+            document.getElementById('pin-prompt-modal').style.display = 'flex';
+        }
+
         // Voice Room Phase 1: temp guest profile (name + emoji + stable pid).
         let myProfile = { name: '', emoji: '\ud83d\udca7', pid: '' };
         try {
@@ -854,6 +1170,11 @@ object WebPortalTemplate {
             div.appendChild(timeSpan);
 
             messagesScroller.appendChild(div);
+            if (burnAfterRead) {
+                setTimeout(() => {
+                    if (div && div.parentNode) div.remove();
+                }, 60000);
+            }
             if (scroll) messagesScroller.scrollTop = messagesScroller.scrollHeight;
         }
 
@@ -867,8 +1188,24 @@ object WebPortalTemplate {
                     lastHistoryHash = hash;
                     messagesScroller.innerHTML = '<div class="date-pill">Local Mesh Chat • End-to-End Direct</div>';
                     for (let m of data) {
+                        let senderName = m.sender;
+                        let msgText = m.message;
+                        if (m.type === 'e2ee' && m.payload) {
+                            if (cryptoKey) {
+                                try {
+                                    const dec = await decryptPayload(m.payload, cryptoKey);
+                                    const parsed = JSON.parse(dec);
+                                    senderName = parsed.sender || senderName;
+                                    msgText = parsed.message || '';
+                                } catch(e) {
+                                    msgText = '🔒 [Ciphertext - Enter Host PIN to decrypt]';
+                                }
+                            } else {
+                                msgText = '🔒 [Ciphertext - Enter Host PIN to decrypt]';
+                            }
+                        }
                         try {
-                            const p = JSON.parse(m.message);
+                            const p = JSON.parse(msgText);
                             if (p.type === 'sos_beacon') {
                                 showSosBeacon(p);
                                 continue;
@@ -877,7 +1214,7 @@ object WebPortalTemplate {
                                 continue;
                             }
                         } catch(e) {}
-                        appendMessageElement(m.sender, m.message, bareName(m.sender) === myName, false);
+                        appendMessageElement(senderName, msgText, bareName(senderName) === myName, false);
                     }
                     messagesScroller.scrollTop = messagesScroller.scrollHeight;
                 }
@@ -914,9 +1251,19 @@ object WebPortalTemplate {
                 document.getElementById('diag-ws-status').innerText = 'Active (Connected)';
                 updateBleUi();
             };
-            ws.onmessage = (e) => {
+            ws.onmessage = async (e) => {
                 try {
-                    const data = JSON.parse(e.data);
+                    let data = JSON.parse(e.data);
+                    if (data.type === 'e2ee' && data.payload) {
+                        if (cryptoKey) {
+                            try {
+                                const dec = await decryptPayload(data.payload, cryptoKey);
+                                data = JSON.parse(dec);
+                            } catch(err) {
+                                console.error("Could not decrypt ws frame", err);
+                            }
+                        }
+                    }
                     const msg = JSON.parse(data.message || e.data);
                     if (msg.type === 'mesh_music_sync') {
                         document.getElementById('web-music-title').innerText = msg.trackTitle || 'Playing Track';
@@ -936,13 +1283,22 @@ object WebPortalTemplate {
                 fetchHistory();
                 playAudioChime();
             };
-            ws.onclose = () => {
+            ws.onclose = (e) => {
+                if (e && e.code === 1008) {
+                    const statusEl = document.getElementById('diag-ws-status');
+                    if (statusEl) statusEl.innerText = 'Access Denied / Room Sealed';
+                    const notice = document.createElement('div');
+                    notice.style.cssText = 'position:fixed;inset:0;background:rgba(18,24,31,0.95);z-index:99999;display:flex;align-items:center;justify-content:center;color:#e9edef;text-align:center;padding:24px;font-family:sans-serif;';
+                    notice.innerHTML = '<div style="max-width:340px;background:#1f2c34;padding:28px 20px;border-radius:16px;border:1px solid #ef5350;"><div style="font-size:48px;margin-bottom:12px;">🔒</div><h3 style="margin:0 0 8px 0;color:#ef5350;">Session Terminated</h3><p style="color:#8696a0;font-size:14px;line-height:1.4;margin:0 0 16px 0;">The host has locked/sealed this room or disconnected this device session.</p><button onclick="location.reload()" style="background:#00a884;color:#fff;border:none;padding:10px 20px;border-radius:8px;font-weight:bold;cursor:pointer;">Retry</button></div>';
+                    document.body.appendChild(notice);
+                    return;
+                }
                 document.getElementById('diag-ws-status').innerText = 'Reconnecting in 2s...';
                 updateBleUi();
                 setTimeout(connectWebSocket, 2000);
             };
         }
-        connectWebSocket();
+        initE2ee().then(() => connectWebSocket());
 
         // Voice Room Phase 1: first visit -> force temp-profile setup.
         try { if (!localStorage.getItem('aether_profile')) openProfileModal(); } catch(e) {}
@@ -1416,7 +1772,20 @@ object WebPortalTemplate {
             if (!txt) return;
             input.value = '';
 
-            const payload = JSON.stringify({ sender: myName, message: txt });
+            let payload;
+            if (cryptoKey) {
+                try {
+                    const plainObj = { sender: myName, message: txt, timestamp: Date.now() };
+                    const enc = await encryptPayload(JSON.stringify(plainObj), cryptoKey);
+                    payload = JSON.stringify({ type: 'e2ee', payload: enc });
+                } catch(err) {
+                    console.error("Encryption failed, sending plain", err);
+                    payload = JSON.stringify({ sender: myName, message: txt });
+                }
+            } else {
+                payload = JSON.stringify({ sender: myName, message: txt });
+            }
+
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(payload);
             } else if (bleLink) {

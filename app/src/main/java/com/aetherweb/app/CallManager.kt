@@ -64,7 +64,7 @@ object CallManager {
     fun getLiveVideoManager(): LiveVideoManager? = liveVideoManager
     fun getLiveVoiceManager(): LiveVoiceManager? = liveVoiceManager
 
-    fun initiateCall(peerId: String, peerName: String, peerIp: String = "", sendMessage: (String) -> Unit) {
+    fun initiateCall(peerId: String, peerName: String, peerIp: String = "", isVideo: Boolean = false, sendMessage: (String) -> Unit) {
         if (_callSession.value.state != CallState.IDLE) return
 
         myKeyPair = generateECKeyPair()
@@ -78,7 +78,8 @@ object CallManager {
                 peerName = peerName,
                 peerIp = peerIp,
                 isEncrypted = false,
-                connectionType = "Wi-Fi Direct"
+                connectionType = "Wi-Fi Direct",
+                isVideoEnabled = isVideo
             )
         }
 
@@ -99,7 +100,10 @@ object CallManager {
             targetPeerId = peerId,
             pubKey = pubKeyBase64
         )
-        sendMessage(offerPacket.toJsonString())
+        val offerJson = offerPacket.toJson().apply {
+            put("isVideo", isVideo)
+        }
+        sendMessage(offerJson.toString())
     }
 
     fun handleCallOffer(payload: JSONObject, sendMessage: (String) -> Unit) {
@@ -123,6 +127,7 @@ object CallManager {
         val callerName = payload.optString("callerName", "Nearby Peer")
         val callerIp = payload.optString("callerIp", "")
         val callerPubKeyStr = payload.optString("pubKey", "")
+        val isVideo = payload.optBoolean("isVideo", false)
 
         peerPublicKeyStrTemp = callerPubKeyStr
 
@@ -133,7 +138,8 @@ object CallManager {
                 peerName = callerName,
                 peerIp = callerIp,
                 isEncrypted = false,
-                connectionType = "Wi-Fi Direct"
+                connectionType = "Wi-Fi Direct",
+                isVideoEnabled = isVideo
             )
         }
 

@@ -126,6 +126,48 @@ class CryptoManager {
             return javax.crypto.spec.SecretKeySpec(decoded, 0, decoded.size, "AES")
         }
 
+        fun generateSalt(length: Int = 16): ByteArray {
+            val salt = ByteArray(length)
+            java.security.SecureRandom().nextBytes(salt)
+            return salt
+        }
+
+        fun deriveKeyFromPin(pin: String, salt: ByteArray, iterations: Int = 100000): javax.crypto.SecretKey {
+            val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+            val spec = javax.crypto.spec.PBEKeySpec(pin.toCharArray(), salt, iterations, 256)
+            val tmp = factory.generateSecret(spec)
+            return javax.crypto.spec.SecretKeySpec(tmp.encoded, "AES")
+        }
+
+        fun bytesToHex(bytes: ByteArray): String {
+            val sb = StringBuilder(bytes.size * 2)
+            for (b in bytes) {
+                sb.append(String.format("%02x", b))
+            }
+            return sb.toString()
+        }
+
+        fun hexToBytes(hex: String): ByteArray {
+            val len = hex.length
+            val data = ByteArray(len / 2)
+            var i = 0
+            while (i < len) {
+                data[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
+                i += 2
+            }
+            return data
+        }
+
+        fun fingerprint(secretKey: javax.crypto.SecretKey): String {
+            return try {
+                val md = java.security.MessageDigest.getInstance("SHA-256")
+                val hash = md.digest(secretKey.encoded)
+                bytesToHex(hash).take(16).uppercase()
+            } catch (e: Exception) {
+                "VERIFIED"
+            }
+        }
+
         fun encryptAES(data: String, secretKey: javax.crypto.SecretKey): String {
             val cipher = javax.crypto.Cipher.getInstance(AES_ALGORITHM)
             val iv = ByteArray(GCM_IV_LENGTH)

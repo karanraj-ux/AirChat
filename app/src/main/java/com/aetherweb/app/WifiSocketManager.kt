@@ -43,6 +43,7 @@ class WifiSocketManager(
     val activeWifiNodes = kotlinx.coroutines.flow.MutableStateFlow<Map<String, String>>(emptyMap())
     private val peerNames = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val lastHeartbeatMap = ConcurrentHashMap<String, Long>()
+    var onClientDisconnected: ((String) -> Unit)? = null
 
     private val _incomingPackets = MutableSharedFlow<String>(extraBufferCapacity = 50)
     val incomingPackets = _incomingPackets.asSharedFlow()
@@ -178,7 +179,12 @@ class WifiSocketManager(
         scope.launch {
             try {
                 Log.d("WifiSocketManager", "Connecting to discovered peer: $ip:$port")
-                val socket = Socket()
+                val socket = Socket().apply {
+                    tcpNoDelay = true
+                    keepAlive = true
+                    sendBufferSize = 64 * 1024
+                    receiveBufferSize = 64 * 1024
+                }
                 network?.bindSocket(socket)
                 socket.connect(java.net.InetSocketAddress(ip, port), 2000)
                 handleNewConnection(ip, socket)
@@ -316,6 +322,12 @@ class WifiSocketManager(
     private fun handleNewConnection(ip: String, socket: Socket) {
         scope.launch {
             try {
+                try {
+                    socket.tcpNoDelay = true
+                    socket.keepAlive = true
+                    socket.sendBufferSize = 64 * 1024
+                    socket.receiveBufferSize = 64 * 1024
+                } catch (e: Exception) {}
                 val out = PrintWriter(socket.getOutputStream(), true)
                 val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
                 
@@ -429,6 +441,11 @@ class WifiSocketManager(
         activeWifiNodes.value = peerNames.toMap()
         WifiClusterBridgeManager.removePeerRoute(ip)
         WifiClusterBridgeManager.checkClusterCapacity(activeConnections.size, MeshNetworkManager.uiState.value.isHotspotActive)
+        try {
+            onClientDisconnected?.invoke(ip)
+        } catch (e: Exception) {
+            Log.e("WifiSocketManager", "Error in onClientDisconnected callback", e)
+        }
     }
 
     fun broadcastPacket(payload: String) {

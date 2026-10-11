@@ -365,6 +365,67 @@ fun MusicTabScreen(modifier: Modifier = Modifier) {
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // SENSORY EQUALIZER BARS & HAPTIC RHYTHM STATUS
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Animated jumping sound wave bars
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val isPlaying = playerState.isPlaying
+                        val barHeights = listOf(14.dp, 22.dp, 10.dp, 26.dp, 18.dp, 12.dp, 20.dp)
+                        barHeights.forEachIndexed { idx, defaultHeight ->
+                            val animHeight = if (isPlaying) {
+                                val phase = (rotation + idx * 45f) % 360f
+                                val factor = 0.4f + 0.6f * kotlin.math.abs(kotlin.math.sin(Math.toRadians(phase.toDouble())).toFloat())
+                                (defaultHeight.value * factor).dp.coerceAtLeast(6.dp)
+                            } else {
+                                6.dp
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .width(4.dp)
+                                    .height(animHeight)
+                                    .background(
+                                        if (isPlaying) Color(0xFF25D366) else Color.Gray,
+                                        RoundedCornerShape(2.dp)
+                                    )
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (playerState.isPlaying) "Live Rhythm Wave" else "Paused",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (playerState.isPlaying) Color(0xFF25D366) else Color.Gray
+                        )
+                    }
+
+                    // Haptic Bass Pulse Toggle Button
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clickable { MeshMusicManager.toggleHaptics() }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = if (playerState.hapticsEnabled) "📳 Haptics: ON" else "📳 Haptics: OFF",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (playerState.hapticsEnabled) Color(0xFF00E5FF) else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
         }
 

@@ -176,7 +176,7 @@ object OfflineGamePacks {
 
             if (gameMode === 'bot' && currentTurn === "O" && !gameOver) {
                 document.getElementById('status-card').innerText = "🤖 Bot is thinking...";
-                setTimeout(makeBotMove, 280);
+                setTimeout(makeBotMove, 800 + Math.floor(Math.random() * 600));
             }
         }
 
@@ -596,7 +596,7 @@ object OfflineGamePacks {
             broadcastMeshState();
 
             if (gameMode === 'bot' && turn === 'b' && !gameOver) {
-                setTimeout(makeBotMove, 250);
+                setTimeout(makeBotMove, 1100 + Math.floor(Math.random() * 800));
             }
         }
 

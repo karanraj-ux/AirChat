@@ -423,26 +423,57 @@ object MeshPacketDispatcher {
             }
 
             is MeshPacket.SysHandshake -> {
-                val sysMsg = ChatMessage(
-                    senderName = "System",
-                    isFromMe = false,
-                    message = "High-Speed Mesh Found!\nHost: ${packet.ssid}\nPassword: ${packet.pwd}"
-                )
-                manager._uiState.update { it.copy(
-                    discoveredHostSsid = packet.ssid,
-                    discoveredHostPwd = packet.pwd,
-                    discoveredHostIp = packet.ip,
-                    messages = listOf(sysMsg) + it.messages
-                ) }
+                val isNewHost = manager._uiState.value.discoveredHostSsid != packet.ssid
+                manager._uiState.update { current ->
+                    val updatedMessages = if (isNewHost) {
+                        val sysMsg = ChatMessage(
+                            senderName = "System",
+                            isFromMe = false,
+                            message = "High-Speed Mesh Found!\nHost: ${packet.ssid}\nPassword: ${packet.pwd}"
+                        )
+                        listOf(sysMsg) + current.messages
+                    } else current.messages
+
+                    current.copy(
+                        discoveredHostSsid = packet.ssid,
+                        discoveredHostPwd = packet.pwd,
+                        discoveredHostIp = packet.ip,
+                        messages = updatedMessages
+                    )
+                }
 
                 val currentState = manager._uiState.value
                 if (currentState.autoJoinBeaconEnabled &&
                     !currentState.isHotspotActive &&
                     !currentState.isWifiConnected &&
+                    packet.pwd.isNotBlank() &&
                     packet.pwd != "PRIVATE"
                 ) {
                     DiagnosticLogger.log("BLE Pulse Beacon", "Auto-Join", "Auto-joining mesh room ${packet.ssid} without QR scan", EventStatus.SUCCESS)
                     manager.hotspotManager?.connectToHotspot(packet.ssid, packet.pwd, packet.ip)
+                }
+                return true
+            }
+
+            is MeshPacket.PinHotspot -> {
+                if (packet.isPinned && packet.ssid.isNotBlank()) {
+                    val pinned = com.aetherweb.app.PinnedHotspot(
+                        ssid = packet.ssid,
+                        password = packet.pwd,
+                        ip = packet.ip,
+                        hostName = packet.hostName,
+                        timestamp = packet.timestamp
+                    )
+                    manager._uiState.update { current ->
+                        current.copy(
+                            pinnedHotspot = pinned,
+                            discoveredHostSsid = if (!current.isHotspotActive && !current.isWifiConnected) packet.ssid else current.discoveredHostSsid,
+                            discoveredHostPwd = if (!current.isHotspotActive && !current.isWifiConnected) packet.pwd else current.discoveredHostPwd,
+                            discoveredHostIp = if (!current.isHotspotActive && !current.isWifiConnected) packet.ip else current.discoveredHostIp
+                        )
+                    }
+                } else {
+                    manager._uiState.update { it.copy(pinnedHotspot = null) }
                 }
                 return true
             }

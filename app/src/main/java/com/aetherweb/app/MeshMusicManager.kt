@@ -40,7 +40,8 @@ data class MusicPlayerState(
     val partyHostName: String = "",
     val isShuffle: Boolean = false,
     val isRepeat: Boolean = false,
-    val volume: Float = 1.0f
+    val volume: Float = 1.0f,
+    val hapticsEnabled: Boolean = true      // Sensory tactile pulse on beats/sync
 )
 
 /**
@@ -60,6 +61,28 @@ object MeshMusicManager {
     private var appContext: Context? = null
     private val scope = CoroutineScope(Dispatchers.Main)
     private val handler = Handler(Looper.getMainLooper())
+
+    private fun triggerHapticBeat() {
+        if (!_state.value.hapticsEnabled) return
+        try {
+            val ctx = appContext ?: return
+            val vibrator = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                val vm = ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
+                vm?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                ctx.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+            }
+            if (vibrator?.hasVibrator() == true) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    vibrator.vibrate(android.os.VibrationEffect.createOneShot(28, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator.vibrate(28)
+                }
+            }
+        } catch (e: Exception) {}
+    }
 
     private val progressRunnable = object : Runnable {
         override fun run() {
@@ -137,11 +160,34 @@ object MeshMusicManager {
     fun addTrackFromUri(context: Context, uri: Uri, displayName: String?) {
         scope.launch(Dispatchers.IO) {
             val name = displayName ?: (uri.lastPathSegment ?: "Offline Track")
+            val cleanTitle = name.substringBeforeLast(".")
+            var cachedPath: String? = null
+            
+            // Cache content:// stream to local disk so /audio/current and peers can stream it!
+            try {
+                if (uri.scheme == "content" || uri.scheme == "file") {
+                    val cacheDir = MeshStorageManager.getCacheDir(context)
+                    val safeName = "mesh_audio_" + cleanTitle.replace("[^a-zA-Z0-9_]".toRegex(), "_").take(30) + "_" + (System.currentTimeMillis() % 10000) + ".mp3"
+                    val destFile = File(cacheDir, safeName)
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        destFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    if (destFile.exists() && destFile.length() > 0) {
+                        cachedPath = destFile.absolutePath
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not cache audio file for HTTP streaming: ${e.message}")
+            }
+
             val track = MusicTrack(
-                title = name.substringBeforeLast("."),
+                title = cleanTitle,
                 artist = "Local Audio",
                 uriString = uri.toString(),
-                isStream = false
+                isStream = false,
+                localFilePath = cachedPath
             )
             _state.update { it.copy(playlist = it.playlist + track) }
             if (_state.value.currentTrack == null) {
@@ -164,6 +210,7 @@ object MeshMusicManager {
     fun playTrack(track: MusicTrack) {
         val index = _state.value.playlist.indexOfFirst { it.id == track.id }
         _state.update { it.copy(currentTrack = track, currentIndex = if (index != -1) index else it.currentIndex) }
+        triggerHapticBeat()
 
         scope.launch(Dispatchers.IO) {
             try {
@@ -176,15 +223,16 @@ object MeshMusicManager {
                             .setUsage(AudioAttributes.USAGE_MEDIA)
                             .build()
                     )
-                    if (track.uriString.startsWith("content://") || track.uriString.startsWith("file://")) {
-                        setDataSource(ctx, Uri.parse(track.uriString))
-                    } else if (track.localFilePath != null) {
+                    if (track.localFilePath != null && File(track.localFilePath).exists()) {
                         setDataSource(track.localFilePath)
+                    } else if (track.uriString.startsWith("content://") || track.uriString.startsWith("file://")) {
+                        setDataSource(ctx, Uri.parse(track.uriString))
                     } else {
                         setDataSource(track.uriString)
                     }
                     setOnPreparedListener { preparedMp ->
                         preparedMp.start()
+                        triggerHapticBeat()
                         val dur = preparedMp.duration.toLong().coerceAtLeast(0L)
                         _state.update { it.copy(isPlaying = true, durationMs = dur) }
                         if (_state.value.isPartyModeHost) {
@@ -211,6 +259,7 @@ object MeshMusicManager {
 
     fun togglePlayPause() {
         val mp = mediaPlayer
+        triggerHapticBeat()
         if (mp != null) {
             if (mp.isPlaying) {
                 mp.pause()
@@ -230,11 +279,18 @@ object MeshMusicManager {
     fun seekTo(positionMs: Long) {
         mediaPlayer?.let { mp ->
             try {
+                triggerHapticBeat()
                 mp.seekTo(positionMs.toInt())
                 _state.update { it.copy(currentPositionMs = positionMs) }
                 if (_state.value.isPartyModeHost) broadcastSyncPacket("seek", positionMs)
             } catch (e: Exception) {}
         }
+    }
+
+    fun toggleHaptics() {
+        val next = !_state.value.hapticsEnabled
+        _state.update { it.copy(hapticsEnabled = next) }
+        if (next) triggerHapticBeat()
     }
 
     fun skipNext() {
@@ -298,12 +354,15 @@ object MeshMusicManager {
     private fun broadcastSyncPacket(action: String, positionMs: Long) {
         val track = _state.value.currentTrack ?: return
         val hostName = MeshNetworkManager.localNodeId
+        val hostIp = MeshNetworkManager.uiState.value.hotspotIp.ifBlank { "192.168.49.1" }
+        val streamUrl = if (track.isStream) track.uriString else "http://$hostIp:8080/audio/current"
+        
         val musicPacket = com.aetherweb.app.protocol.MeshPacket.MeshMusicSync(
             action = action,
             trackTitle = track.title,
             artist = track.artist,
-            uri = track.uriString,
-            isStream = track.isStream,
+            uri = streamUrl,
+            isStream = track.isStream || track.localFilePath != null,
             positionMs = positionMs,
             hostName = hostName
         )

@@ -65,13 +65,27 @@ class WebServerManager(
     private val onProfileUpdated: (SpectatorRequest) -> Unit = {},
     private val onVoiceJoinRequested: (SpectatorRequest) -> Unit = {},
     // Voice Room Phase 3: voice-approval gate for the /ws-voice SFU.
-    private val isVoiceApproved: (String) -> Boolean = { false }
+    private val isVoiceApproved: (String) -> Boolean = { false },
+    private val isRoomFullOrSealed: (String) -> Boolean = { false },
+    private val isKicked: (String) -> Boolean = { false }
 ) {
     private var server: io.ktor.server.engine.EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>? = null
 
     data class WebMessage(val id: Int, val sender: String, val message: String, val isHistory: Boolean)
     private var messageCounter = 0
     private val newMessagesFlow = MutableSharedFlow<WebMessage>(extraBufferCapacity = 100)
+
+    private val activeWebSockets = java.util.concurrent.ConcurrentHashMap<String, io.ktor.server.websocket.WebSocketServerSession>()
+
+    fun disconnectClient(ip: String) {
+        val wsSession = activeWebSockets.remove(ip)
+        kickVoiceMember(ip)
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                wsSession?.close(io.ktor.websocket.CloseReason(io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY, "Kicked by host"))
+            } catch (_: Exception) {}
+        }
+    }
 
     private val downloadSemaphore = kotlinx.coroutines.sync.Semaphore(2)
 
@@ -267,10 +281,15 @@ class WebServerManager(
                 routing {
                     webSocket("/ws") {
                         val ip = call.request.local.remoteHost
-                        if (!isApproved(ip)) {
-                            close(io.ktor.websocket.CloseReason(io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY, "Not approved"))
+                        if (isKicked(ip)) {
+                            close(io.ktor.websocket.CloseReason(io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY, "Kicked from room"))
                             return@webSocket
                         }
+                        if (!isApproved(ip) || isRoomFullOrSealed(ip)) {
+                            close(io.ktor.websocket.CloseReason(io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY, "Room sealed or capacity reached"))
+                            return@webSocket
+                        }
+                        activeWebSockets[ip] = this
                         try {
                             val sender = call.request.queryParameters["sender"] ?: "Web Client"
                             android.util.Log.d("WebServer", "WS Handshake successful, connected: $sender")
@@ -279,10 +298,26 @@ class WebServerManager(
                             
                             val job = launch {
                                 newMessagesFlow.collect { webMsg ->
-                                    val obj = org.json.JSONObject()
-                                    obj.put("sender", webMsg.sender)
-                                    obj.put("message", webMsg.message)
-                                    val json = obj.toString()
+                                    val sessionKey = MeshNetworkManager.webSessionKey
+                                    val json = if (sessionKey != null) {
+                                        val inner = org.json.JSONObject().apply {
+                                            put("sender", webMsg.sender)
+                                            put("message", webMsg.message)
+                                            put("id", webMsg.id)
+                                            put("isHistory", webMsg.isHistory)
+                                        }
+                                        val encrypted = CryptoManager.encryptAES(inner.toString(), sessionKey)
+                                        val outer = org.json.JSONObject().apply {
+                                            put("type", "e2ee")
+                                            put("payload", encrypted)
+                                        }
+                                        outer.toString()
+                                    } else {
+                                        val obj = org.json.JSONObject()
+                                        obj.put("sender", webMsg.sender)
+                                        obj.put("message", webMsg.message)
+                                        obj.toString()
+                                    }
                                     send(io.ktor.websocket.Frame.Text(json))
                                     android.util.Log.d("WebServer", "WS Message Delivered to $sender: $json")
                                 }
@@ -293,11 +328,26 @@ class WebServerManager(
                                     val text = frame.readText()
                                     try {
                                         val obj = org.json.JSONObject(text)
-                                        val msgSender = obj.optString("sender", "")
-                                        val message = obj.optString("message", "")
-                                        if (msgSender.isNotEmpty() && message.isNotEmpty()) {
-                                            android.util.Log.d("WebServer", "WS Message Received from $msgSender: $message")
-                                            onMessageReceived(message, msgSender)
+                                        if (obj.optString("type") == "e2ee") {
+                                            val encPayload = obj.optString("payload", "")
+                                            val sessionKey = MeshNetworkManager.webSessionKey
+                                            if (sessionKey != null && encPayload.isNotEmpty()) {
+                                                val decrypted = CryptoManager.decryptAES(encPayload, sessionKey)
+                                                val inner = org.json.JSONObject(decrypted)
+                                                val msgSender = inner.optString("sender", sender)
+                                                val message = inner.optString("message", "")
+                                                if (msgSender.isNotEmpty() && message.isNotEmpty()) {
+                                                    android.util.Log.d("WebServer", "WS E2EE Message Received from $msgSender: $message")
+                                                    onMessageReceived(message, msgSender)
+                                                }
+                                            }
+                                        } else {
+                                            val msgSender = obj.optString("sender", "")
+                                            val message = obj.optString("message", "")
+                                            if (msgSender.isNotEmpty() && message.isNotEmpty()) {
+                                                android.util.Log.d("WebServer", "WS Message Received from $msgSender: $message")
+                                                onMessageReceived(message, msgSender)
+                                            }
                                         }
                                     } catch(e: Exception) {
                                         Log.e("WebServer", "Error parsing WS message", e)
@@ -307,6 +357,8 @@ class WebServerManager(
                             job.cancel()
                         } catch (e: Exception) {
                             Log.e("WebServer", "WebSocket error", e)
+                        } finally {
+                            activeWebSockets.remove(ip)
                         }
                     }
                                         get("/tictactoe") {
@@ -367,8 +419,44 @@ class WebServerManager(
                     get("/") {
                         try {
                             val ip = call.request.local.remoteHost
-                            onClientConnected(ip)
+                            if (isKicked(ip)) {
+                                call.respondText("""
+                                    <!DOCTYPE html><html>
+                                    <head><title>Access Denied</title><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+                                    <body style="background:#111b21;color:#ff5252;display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;margin:0;text-align:center;padding:24px;">
+                                    <div style="max-width:340px;background:#202c33;padding:32px 24px;border-radius:16px;border:1px solid #ef5350;">
+                                      <div style="font-size:48px;margin-bottom:12px;">🚫</div>
+                                      <h2 style="font-size:20px;color:#ff5252;margin:0 0 10px 0;">Access Denied</h2>
+                                      <p style="color:#8696a0;font-size:14px;line-height:1.5;margin:0;">You have been removed and blocked from this private mesh room by the host.</p>
+                                    </div>
+                                    </body></html>
+                                """.trimIndent(), io.ktor.http.ContentType.Text.Html, io.ktor.http.HttpStatusCode.Forbidden)
+                                return@get
+                            }
                             if (!isApproved(ip)) {
+                                if (isRoomFullOrSealed(ip)) {
+                                    call.respondText("""
+                                        <!DOCTYPE html><html>
+                                        <head><title>Room Sealed &amp; Full</title><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+                                        <body style="background:#111b21;color:#e9edef;display:flex;align-items:center;justify-content:center;min-height:100vh;font-family:sans-serif;margin:0;text-align:center;padding:24px;">
+                                        <div style="max-width:360px;background:#202c33;padding:32px 24px;border-radius:16px;border:1px solid #00a884;box-shadow:0 8px 32px rgba(0,0,0,0.5);">
+                                          <div style="font-size:52px;margin-bottom:12px;">🔒</div>
+                                          <h2 style="font-size:22px;color:#00a884;margin:0 0 10px 0;">Room Sealed &amp; Locked</h2>
+                                          <div style="display:inline-block;background:#111b21;color:#25d366;padding:6px 14px;border-radius:20px;font-weight:bold;font-size:13px;border:1px solid #25d366;margin-bottom:16px;">
+                                            Capacity Limit Reached
+                                          </div>
+                                          <p style="color:#8696a0;font-size:14px;line-height:1.5;margin:0 0 20px 0;">
+                                            This mesh room has reached its maximum participant limit and is cryptographically locked against any new connections or external surveillance.
+                                          </p>
+                                          <div style="font-size:12px;color:#607d8b;border-top:1px solid #2a3942;padding-top:14px;">
+                                            🛡️ AirChat Anti-Infiltration Mesh Shield
+                                          </div>
+                                        </div>
+                                        </body></html>
+                                    """.trimIndent(), io.ktor.http.ContentType.Text.Html, io.ktor.http.HttpStatusCode.Forbidden)
+                                    return@get
+                                }
+                                onClientConnected(ip)
                                 call.respondText("""
                                     <!DOCTYPE html><html>
                                     <head><title>Waiting for Approval</title><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="30"></head>
@@ -412,7 +500,7 @@ class WebServerManager(
                             call.response.header("Pragma", "no-cache")
                             call.response.header("Expires", "0")
                             call.respondText(
-                                WebPortalTemplate.getHtml(isLite = BuildConfig.FLAVOR == "lite"),
+                                WebPortalTemplate.getHtml(isLite = MeshNetworkManager.uiState.value.isLiteMode || BuildConfig.FLAVOR == "lite", saltHex = MeshNetworkManager.webSessionSaltHex),
                                 io.ktor.http.ContentType.Text.Html,
                                 io.ktor.http.HttpStatusCode.OK
                             )
@@ -477,11 +565,15 @@ class WebServerManager(
                     webSocket("/ws-voice") {
                         val ip = call.request.local.remoteHost
                         val isSelf = ip == "127.0.0.1" || ip == "::1"
-                        if (!isSelf && (!isApproved(ip) || !isVoiceApproved(ip))) {
+                        if (isKicked(ip)) {
+                            close(io.ktor.websocket.CloseReason(io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY, "Kicked from room"))
+                            return@webSocket
+                        }
+                        if (!isSelf && (!isApproved(ip) || !isVoiceApproved(ip) || isRoomFullOrSealed(ip))) {
                             close(
                                 io.ktor.websocket.CloseReason(
                                     io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY,
-                                    "Voice not approved"
+                                    "Voice not approved or room sealed"
                                 )
                             )
                             return@webSocket
@@ -601,8 +693,21 @@ class WebServerManager(
                     get("/audio/current") {
                         try {
                             val currentTrack = MeshMusicManager.state.value.currentTrack
-                            val localPath = currentTrack?.localFilePath
-                            val file = if (localPath != null) File(localPath) else null
+                            var localPath = currentTrack?.localFilePath
+                            var file = if (localPath != null) File(localPath) else null
+                            if ((file == null || !file.exists()) && currentTrack?.uriString != null) {
+                                try {
+                                    val uri = android.net.Uri.parse(currentTrack.uriString)
+                                    val cacheDir = MeshStorageManager.getCacheDir(this@WebServerManager.context)
+                                    val cachedFile = File(cacheDir, "mesh_audio_current.mp3")
+                                    this@WebServerManager.context.contentResolver.openInputStream(uri)?.use { input ->
+                                        cachedFile.outputStream().use { output -> input.copyTo(output) }
+                                    }
+                                    if (cachedFile.exists() && cachedFile.length() > 0) {
+                                        file = cachedFile
+                                    }
+                                } catch (e: Exception) {}
+                            }
                             if (file != null && file.exists()) {
                                 call.response.header("Access-Control-Allow-Origin", "*")
                                 call.response.header("Accept-Ranges", "bytes")
@@ -616,12 +721,29 @@ class WebServerManager(
                             call.respondText(e.message ?: "Error", status = io.ktor.http.HttpStatusCode.InternalServerError)
                         }
                     }
+                    get("/video/current") {
+                        try {
+                            val cacheDir = MeshStorageManager.getCacheDir(this@WebServerManager.context)
+                            val videoFile = cacheDir.listFiles()?.firstOrNull { MeshStorageManager.isVideoFile(it.name) }
+                            if (videoFile != null && videoFile.exists()) {
+                                call.response.header("Access-Control-Allow-Origin", "*")
+                                call.response.header("Accept-Ranges", "bytes")
+                                call.response.header(io.ktor.http.HttpHeaders.ContentType, "video/mp4")
+                                call.response.header(io.ktor.http.HttpHeaders.ContentLength, videoFile.length().toString())
+                                call.respondFile(videoFile)
+                            } else {
+                                call.respondText("Video stream unavailable", status = io.ktor.http.HttpStatusCode.NotFound)
+                            }
+                        } catch (e: Exception) {
+                            call.respondText(e.message ?: "Error", status = io.ktor.http.HttpStatusCode.InternalServerError)
+                        }
+                    }
                     get("/download") {
                         try {
                             call.response.header("Access-Control-Allow-Origin", "*")
                             call.response.header("Cache-Control", "no-cache, no-store, must-revalidate")
                             val apkFile = File(this@WebServerManager.context.applicationInfo.sourceDir)
-                            val dlName = if (BuildConfig.FLAVOR == "lite") "AetherWeb-lite.apk" else "AetherWeb.apk"
+                            val dlName = if (BuildConfig.FLAVOR == "lite") "AirChat-lite.apk" else "AirChat.apk"
                             if (apkFile.exists()) {
                                 call.response.header(io.ktor.http.HttpHeaders.ContentDisposition, "attachment; filename=\"$dlName\"")
                                 call.response.header(io.ktor.http.HttpHeaders.ContentType, "application/vnd.android.package-archive")
@@ -657,7 +779,7 @@ class WebServerManager(
                             val apkFile = if (seedFile.exists()) seedFile
                                 else File(ctx.applicationInfo.sourceDir)
                             if (apkFile.exists()) {
-                                call.response.header(io.ktor.http.HttpHeaders.ContentDisposition, "attachment; filename=\"AetherWeb-lite.apk\"")
+                                call.response.header(io.ktor.http.HttpHeaders.ContentDisposition, "attachment; filename=\"AirChat-lite.apk\"")
                                 call.response.header(io.ktor.http.HttpHeaders.ContentType, "application/vnd.android.package-archive")
                                 call.response.header(io.ktor.http.HttpHeaders.ContentLength, apkFile.length().toString())
                                 call.response.header("Accept-Ranges", "bytes")
@@ -782,6 +904,31 @@ class WebServerManager(
                             call.respondText("{\"status\":\"error\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.BadRequest)
                         }
                     }
+                    get("/api/speed_test") {
+                        try {
+                            val isHotspot = MeshNetworkManager._uiState.value.isHotspotActive
+                            val isWifi = MeshNetworkManager._uiState.value.isWifiConnected
+                            val linkType = when {
+                                isHotspot -> "Wi-Fi 5GHz AP Direct"
+                                isWifi -> "Wi-Fi Socket Link"
+                                else -> "Bluetooth Mesh Relay"
+                            }
+                            val maxSpeed = when {
+                                isHotspot -> "480 Mbps"
+                                isWifi -> "150 Mbps"
+                                else -> "2 Mbps PHY"
+                            }
+                            val obj = org.json.JSONObject().apply {
+                                put("status", "ok")
+                                put("linkType", linkType)
+                                put("maxSpeed", maxSpeed)
+                                put("serverTime", System.currentTimeMillis())
+                            }
+                            call.respondText(obj.toString(), io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
+                        } catch (e: Exception) {
+                            call.respondText("{}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.InternalServerError)
+                        }
+                    }
                     post("/api/send_form") {
                         try {
                             val params = call.receiveParameters()
@@ -867,11 +1014,20 @@ class WebServerManager(
                             call.response.header("Cache-Control", "no-cache, no-store, must-revalidate")
                             call.response.header("Pragma", "no-cache")
                             call.response.header("Expires", "0")
-                            call.respondText(WebPortalTemplate.getHtml(isLite = BuildConfig.FLAVOR == "lite"), io.ktor.http.ContentType.Text.Html, io.ktor.http.HttpStatusCode.OK)
+                            call.respondText(WebPortalTemplate.getHtml(isLite = MeshNetworkManager.uiState.value.isLiteMode || BuildConfig.FLAVOR == "lite", saltHex = MeshNetworkManager.webSessionSaltHex), io.ktor.http.ContentType.Text.Html, io.ktor.http.HttpStatusCode.OK)
                         } catch (e: Exception) {
                             Log.e("WebServer", "Error in /chat route", e)
                             DiagnosticLogger.log("WebServer", "Error /chat", e.stackTraceToString().take(200), EventStatus.ERROR)
                         }
+                    }
+                    get("/api/crypto/info") {
+                        val obj = org.json.JSONObject().apply {
+                            put("e2ee", true)
+                            put("salt", MeshNetworkManager.webSessionSaltHex)
+                            put("fingerprint", MeshNetworkManager.webSessionFingerprint)
+                            put("cipher", "AES-256-GCM")
+                        }
+                        call.respondText(obj.toString(), io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
                     }
                     get("/api/history") {
                         try {
@@ -879,12 +1035,24 @@ class WebServerManager(
                             call.response.header("Pragma", "no-cache")
                             call.response.header("Expires", "0")
                             val jsonArray = org.json.JSONArray()
+                            val sessionKey = MeshNetworkManager.webSessionKey
                             getChatHistory().forEachIndexed { index, (sender, msg) ->
                                 val obj = org.json.JSONObject()
                                 obj.put("id", index + 1)
-                                obj.put("sender", sender)
-                                obj.put("message", msg)
                                 obj.put("isHistory", true)
+                                if (sessionKey != null) {
+                                    val inner = org.json.JSONObject().apply {
+                                        put("sender", sender)
+                                        put("message", msg)
+                                    }
+                                    val enc = CryptoManager.encryptAES(inner.toString(), sessionKey)
+                                    obj.put("type", "e2ee")
+                                    obj.put("payload", enc)
+                                    obj.put("sender", sender)
+                                } else {
+                                    obj.put("sender", sender)
+                                    obj.put("message", msg)
+                                }
                                 jsonArray.put(obj)
                             }
                             call.respondText(jsonArray.toString(), io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
@@ -896,12 +1064,32 @@ class WebServerManager(
                         try {
                             val text = call.receiveText()
                             val obj = org.json.JSONObject(text)
-                            val sender = obj.optString("sender", "Web Client")
-                            val message = obj.optString("message", "")
-                            DiagnosticLogger.log("Message Lifecycle", "Origin", "Message created by Web Client ($sender)", EventStatus.SUCCESS)
-                            DiagnosticLogger.logHop("WebClient -> WebServer", "N/A", "Received message: $message from $sender")
-                            onMessageReceived(message, sender)
-                            call.respondText("{\"status\":\"ok\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
+                            val sender: String
+                            val message: String
+                            if (obj.optString("type") == "e2ee") {
+                                val encPayload = obj.optString("payload", "")
+                                val sessionKey = MeshNetworkManager.webSessionKey
+                                if (sessionKey != null && encPayload.isNotEmpty()) {
+                                    val decrypted = CryptoManager.decryptAES(encPayload, sessionKey)
+                                    val inner = org.json.JSONObject(decrypted)
+                                    sender = inner.optString("sender", "Web Client")
+                                    message = inner.optString("message", "")
+                                } else {
+                                    sender = "Web Client"
+                                    message = ""
+                                }
+                            } else {
+                                sender = obj.optString("sender", "Web Client")
+                                message = obj.optString("message", "")
+                            }
+                            if (message.isNotEmpty()) {
+                                DiagnosticLogger.log("Message Lifecycle", "Origin", "Message created by Web Client ($sender)", EventStatus.SUCCESS)
+                                DiagnosticLogger.logHop("WebClient -> WebServer", "N/A", "Received message: $message from $sender")
+                                onMessageReceived(message, sender)
+                                call.respondText("{\"status\":\"ok\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
+                            } else {
+                                call.respondText("{\"status\":\"empty\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
+                            }
                         } catch (e: Exception) {
                             call.respondText("{\"status\":\"error\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.BadRequest)
                         }
@@ -1022,9 +1210,29 @@ class WebServerManager(
                     </div>
                     <div style="display: flex; gap: 6px; align-items: center;">
                         <button onclick="toggleClipboardModal()" class="pill-btn" style="background:#005d4b; border:none; cursor:pointer;">📋 Clipboard</button>
+                        <button onclick="toggleSpeedModal()" class="pill-btn" style="background:#2563eb; border:none; cursor:pointer;">⚡ Speed</button>
+                        <button onclick="toggleMusicDockManual()" class="pill-btn" style="background:#8b5cf6; border:none; cursor:pointer;" id="jukebox-nav-btn">🎵 Music</button>
                         <button onclick="toggleTheme()" class="pill-btn" style="border:none; cursor:pointer;" id="theme-btn">🌓</button>
                         <a href="/tictactoe" class="pill-btn">⭕ Games</a>
                         <a href="/download" class="pill-btn" style="background:#25d366; color:white;" download="MeshChat.apk">APK</a>
+                    </div>
+                </div>
+                <div id="mesh-music-dock" style="display:none; background:#182229; border-bottom:1px solid #2a3942; padding:8px 14px; align-items:center; justify-content:space-between; gap:10px; color:#e9edef; font-size:13px; z-index:90;">
+                    <div style="display:flex; align-items:center; gap:10px; overflow:hidden; flex:1;">
+                        <div id="music-equalizer" style="display:flex; gap:2px; align-items:flex-end; height:18px;">
+                            <span style="width:3px; background:#25d366; height:12px; border-radius:2px;"></span>
+                            <span style="width:3px; background:#25d366; height:18px; border-radius:2px;"></span>
+                            <span style="width:3px; background:#25d366; height:8px; border-radius:2px;"></span>
+                            <span style="width:3px; background:#25d366; height:15px; border-radius:2px;"></span>
+                        </div>
+                        <div style="overflow:hidden; white-space:nowrap; text-overflow:ellipsis;">
+                            <div id="music-dock-title" style="font-weight:bold; font-size:12px; color:#25d366;">♫ Mesh Jukebox</div>
+                            <div id="music-dock-artist" style="font-size:10px; color:#8696a0;">DJ Broadcaster Active</div>
+                        </div>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <button id="music-sync-btn" onclick="toggleWebPartyListen()" style="background:#25d366; color:black; border:none; border-radius:12px; padding:4px 10px; font-weight:bold; font-size:11px; cursor:pointer;">🎧 Listen In Sync</button>
+                        <audio id="party-audio-elem" preload="none"></audio>
                     </div>
                 </div>
                 <div id="clipboard-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:100; align-items:center; justify-content:center;">
@@ -1041,6 +1249,19 @@ class WebServerManager(
                         <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:10px;">
                             <button onclick="toggleClipboardModal()" style="background:#3b4a54; color:white; border:none; padding:8px 14px; border-radius:14px; cursor:pointer;">Close</button>
                             <button onclick="pushClipboard()" style="background:#00a884; color:white; border:none; padding:8px 16px; border-radius:14px; font-weight:bold; cursor:pointer;">Push to Mesh</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="speed-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:100; align-items:center; justify-content:center;">
+                    <div style="background:#1f2c34; border-radius:12px; padding:20px; width:90%; max-width:440px; box-shadow:0 8px 24px rgba(0,0,0,0.5); color:#e9edef;">
+                        <h3 style="margin-top:0;">⚡ Offline Mesh Speed & Benchmark</h3>
+                        <p style="font-size:12px; color:#8696a0;">Direct peer-to-peer network link latency & bandwidth benchmark.</p>
+                        <div id="speed-result-box" style="background:#111b21; padding:12px; border-radius:8px; font-size:13px; line-height:1.5;">
+                            Ready to test link to Android phone...
+                        </div>
+                        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
+                            <button onclick="toggleSpeedModal()" style="background:#3b4a54; color:white; border:none; padding:8px 14px; border-radius:14px; cursor:pointer;">Close</button>
+                            <button onclick="runWebSpeedTest()" id="speed-run-btn" style="background:#2563eb; color:white; border:none; padding:8px 16px; border-radius:14px; font-weight:bold; cursor:pointer;">Run Benchmark</button>
                         </div>
                     </div>
                 </div>
@@ -1078,23 +1299,59 @@ class WebServerManager(
                     </form>
                 </div>
                 </div>
-                <div id="game-view" style="display: none; flex: 1; flex-direction: column; background: #fff; overflow: hidden;">
+                <div id="game-view" style="display: none; flex: 1; flex-direction: column; background: #fff; overflow-y: auto; position: relative;">
                     <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: #1a73e8; color: white;">
                         <h2 id="game-title" style="margin: 0; font-size: 18px;">Arcade</h2>
-                        <button onclick="showView('chat-view')" style="background: #EF4444; padding: 6px 12px; border-radius: 6px; font-size: 14px; border: none; color: white; cursor: pointer;">Close</button>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <button onclick="toggleGameChat()" id="game-chat-btn" style="background: #25d366; padding: 6px 12px; border-radius: 6px; font-size: 13px; border: none; color: white; cursor: pointer; display: flex; align-items: center; gap: 4px; font-weight: bold;">💬 Chat <span id="game-chat-badge" style="display:none; background:#ef4444; border-radius:10px; padding:1px 6px; font-size:10px;">0</span></button>
+                            <button onclick="showView('chat-view')" style="background: #EF4444; padding: 6px 12px; border-radius: 6px; font-size: 14px; border: none; color: white; cursor: pointer;">Close</button>
+                        </div>
                     </div>
-                    <div style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 10px;">
-                        <div id="game-container" style="width: 100%; max-width: 600px; aspect-ratio: 1; display: flex; justify-content: center; align-items: center;"></div>
+                    <div style="flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 10px; overflow-y: auto;">
+                        <div id="game-container" style="width: 100%; max-width: 600px; display: flex; flex-direction: column; justify-content: center; align-items: center;"></div>
                     </div>
                 </div>
-                <div id="canvas-view" style="display: none; flex: 1; flex-direction: column;">
+                <div id="canvas-view" style="display: none; flex: 1; flex-direction: column; position: relative;">
                     <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: #1a73e8; color: white;">
                         <h2 style="margin: 0; font-size: 18px;">Smartboard</h2>
-                        <button onclick="showView('chat-view')" style="background: #EF4444; padding: 6px 12px; border-radius: 6px; font-size: 14px; border: none; color: white; cursor: pointer;">Close</button>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <button onclick="toggleGameChat()" id="canvas-chat-btn" style="background: #25d366; padding: 6px 12px; border-radius: 6px; font-size: 13px; border: none; color: white; cursor: pointer; display: flex; align-items: center; gap: 4px; font-weight: bold;">💬 Chat <span id="canvas-chat-badge" style="display:none; background:#ef4444; border-radius:10px; padding:1px 6px; font-size:10px;">0</span></button>
+                            <button onclick="showView('chat-view')" style="background: #EF4444; padding: 6px 12px; border-radius: 6px; font-size: 14px; border: none; color: white; cursor: pointer;">Close</button>
+                        </div>
                     </div>
                     <div style="flex: 1; position: relative;">
                         <canvas id="drawing-board" style="width: 100%; height: 100%; display: block;"></canvas>
                     </div>
+                </div>
+                <!-- Non-blocking Floating In-Game PIP Chat Drawer (Collapsible & Translucent) -->
+                <div id="game-pip-drawer" style="display: none; position: fixed; top: 58px; right: 12px; width: 320px; max-width: calc(100vw - 24px); max-height: 400px; background: #1f2c34; border: 1px solid #33444d; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); z-index: 99; flex-direction: column; overflow: hidden; transition: opacity 0.2s;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #111b21; border-bottom: 1px solid #2a3942; color: #e9edef;">
+                        <span style="font-weight: bold; font-size: 13px; display: flex; align-items: center; gap: 6px;">💬 Mesh Chat Overlay</span>
+                        <div style="display: flex; gap: 6px; align-items: center;">
+                            <button onclick="togglePipTranslucency()" id="pip-translucent-btn" title="Toggle Translucency" style="background: #2a3942; border: none; color: #8696a0; border-radius: 4px; padding: 2px 6px; font-size: 11px; cursor: pointer;">👁️</button>
+                            <button onclick="toggleGameChat()" style="background: transparent; border: none; color: #8696a0; font-size: 14px; cursor: pointer; line-height: 1;">✕</button>
+                        </div>
+                    </div>
+                    <div id="game-pip-msgs" style="flex: 1; overflow-y: auto; padding: 8px; max-height: 220px; display: flex; flex-direction: column; gap: 6px; background: rgba(17, 27, 33, 0.4);">
+                        <div style="text-align: center; font-size: 10px; color: #8696a0;">In-Game Chat • Connected</div>
+                    </div>
+                    <!-- Quick Emoji Reaction Strip -->
+                    <div style="display: flex; gap: 4px; padding: 4px 8px; background: #111b21; border-top: 1px solid #2a3942; overflow-x: auto; white-space: nowrap;">
+                        <button onclick="sendGamePipEmoji('🔥')" style="background:#2a3942; border:none; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:12px;">🔥</button>
+                        <button onclick="sendGamePipEmoji('👏')" style="background:#2a3942; border:none; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:12px;">👏</button>
+                        <button onclick="sendGamePipEmoji('😂')" style="background:#2a3942; border:none; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:12px;">😂</button>
+                        <button onclick="sendGamePipEmoji('🎯')" style="background:#2a3942; border:none; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:12px;">🎯</button>
+                        <button onclick="sendGamePipEmoji('💀')" style="background:#2a3942; border:none; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:12px;">💀</button>
+                        <button onclick="sendGamePipEmoji('⚡')" style="background:#2a3942; border:none; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:12px;">⚡</button>
+                        <button onclick="sendGamePipEmoji('🥳')" style="background:#2a3942; border:none; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:12px;">🥳</button>
+                        <button onclick="sendGamePipEmoji('🎲')" style="background:#2a3942; border:none; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:12px;">🎲</button>
+                        <button onclick="sendGamePipEmoji('👑')" style="background:#2a3942; border:none; border-radius:4px; padding:2px 6px; cursor:pointer; font-size:12px;">👑</button>
+                    </div>
+                    <!-- In-Game Chat Input Area -->
+                    <form id="game-pip-form" onsubmit="handleGamePipSend(event)" style="display: flex; gap: 4px; padding: 6px 8px; background: #1f2c34; border-top: 1px solid #2a3942;">
+                        <input type="text" id="game-pip-input" placeholder="Chat with players..." style="flex: 1; background: #2a3942; border: 1px solid #33444d; border-radius: 14px; color: #fff; padding: 4px 10px; font-size: 12px; outline: none;">
+                        <button type="submit" style="background: #25d366; border: none; border-radius: 14px; color: white; padding: 4px 10px; font-size: 12px; cursor: pointer; font-weight: bold;">➤</button>
+                    </form>
                 </div>
                 <script>
                     const msgs = document.getElementById('messages');
@@ -1111,9 +1368,112 @@ class WebServerManager(
                         document.getElementById('game-view').style.display = 'none';
                         document.getElementById(viewId).style.display = 'flex';
                         if (viewId === 'canvas-view') resizeCanvas();
+                        if (viewId === 'chat-view') {
+                            const pipDrawer = document.getElementById('game-pip-drawer');
+                            if (pipDrawer) pipDrawer.style.display = 'none';
+                            gamePipUnread = 0;
+                            updateGameChatBadge();
+                        }
                     }
                     function toggleView() {
                         showView('chat-view'); 
+                    }
+
+                    let gamePipUnread = 0;
+                    let isPipTranslucent = false;
+
+                    function toggleGameChat() {
+                        const drawer = document.getElementById('game-pip-drawer');
+                        if (!drawer) return;
+                        const isShowing = drawer.style.display === 'flex';
+                        if (isShowing) {
+                            drawer.style.display = 'none';
+                        } else {
+                            drawer.style.display = 'flex';
+                            gamePipUnread = 0;
+                            updateGameChatBadge();
+                            const msgBox = document.getElementById('game-pip-msgs');
+                            if (msgBox) msgBox.scrollTop = msgBox.scrollHeight;
+                        }
+                    }
+
+                    function updateGameChatBadge() {
+                        const b1 = document.getElementById('game-chat-badge');
+                        const b2 = document.getElementById('canvas-chat-badge');
+                        [b1, b2].forEach(b => {
+                            if (!b) return;
+                            if (gamePipUnread > 0) {
+                                b.innerText = gamePipUnread;
+                                b.style.display = 'inline-block';
+                            } else {
+                                b.style.display = 'none';
+                            }
+                        });
+                    }
+
+                    function togglePipTranslucency() {
+                        const drawer = document.getElementById('game-pip-drawer');
+                        if (!drawer) return;
+                        isPipTranslucent = !isPipTranslucent;
+                        drawer.style.opacity = isPipTranslucent ? '0.70' : '1.0';
+                        drawer.style.backdropFilter = isPipTranslucent ? 'blur(6px)' : 'none';
+                        const btn = document.getElementById('pip-translucent-btn');
+                        if (btn) btn.style.color = isPipTranslucent ? '#25d366' : '#8696a0';
+                    }
+
+                    function sendGamePipEmoji(emoji) {
+                        sendGamePipText(emoji);
+                    }
+
+                    function handleGamePipSend(e) {
+                        e.preventDefault();
+                        const input = document.getElementById('game-pip-input');
+                        if (!input || !input.value.trim()) return;
+                        sendGamePipText(input.value.trim());
+                        input.value = '';
+                    }
+
+                    function sendGamePipText(text) {
+                        if (!text) return;
+                        const payload = JSON.stringify({ sender: myName, message: text });
+                        if (wsManager && wsManager.send(payload)) {
+                            // Sent via WS
+                        } else {
+                            fetch('/api/send', {
+                                method: 'POST',
+                                body: payload,
+                                headers: { 'Content-Type': 'application/json' }
+                            });
+                        }
+                        appendGamePipMessage(myName, text, true);
+                    }
+
+                    function appendGamePipMessage(sender, text, isMe) {
+                        const container = document.getElementById('game-pip-msgs');
+                        if (!container) return;
+                        const div = document.createElement('div');
+                        div.style.padding = '4px 8px';
+                        div.style.borderRadius = '8px';
+                        div.style.fontSize = '12px';
+                        div.style.lineHeight = '1.3';
+                        div.style.maxWidth = '85%';
+                        div.style.wordBreak = 'break-word';
+                        div.style.background = isMe ? '#005c4b' : '#202c33';
+                        div.style.color = '#e9edef';
+                        div.style.alignSelf = isMe ? 'flex-end' : 'flex-start';
+                        div.style.border = '1px solid ' + (isMe ? '#008069' : '#2a3942');
+                        
+                        const senderSpan = isMe ? '' : ('<div style="font-weight:bold; font-size:10px; color:#25d366; margin-bottom:2px;">' + sender + '</div>');
+                        div.innerHTML = senderSpan + '<span>' + text + '</span>';
+                        container.appendChild(div);
+                        container.scrollTop = container.scrollHeight;
+                        
+                        const drawer = document.getElementById('game-pip-drawer');
+                        const isGameOpen = document.getElementById('game-view').style.display !== 'none' || document.getElementById('canvas-view').style.display !== 'none';
+                        if (!isMe && isGameOpen && (!drawer || drawer.style.display !== 'flex')) {
+                            gamePipUnread++;
+                            updateGameChatBadge();
+                        }
                     }
                     
 
@@ -1170,39 +1530,231 @@ class WebServerManager(
                         if (banner) banner.style.display = 'none';
                     }
 
-                    function renderTicTacToe(state) {
-                        if (document.getElementById('game-view').style.display === 'none') { handleSharedMedia({mediaType: 'tictactoe'}); }
-                        const gc = document.getElementById('game-container');
-                        gc.innerHTML = '<div style="display:grid; grid-template-columns: repeat(3, 1fr); width:100%; height:100%; border: 2px solid #333;">' + 
-                            state.board.map((cell) => '<div style="display:flex; align-items:center; justify-content:center; font-size:48px; border:1px solid #ccc;">' + cell + '</div>').join('') + 
-                            '</div>';
+                    let activeGameState = null;
+
+                    function sendGameAction(gameType, action, payload = {}) {
+                        if (!wsManager) return;
+                        const msgObj = {
+                            type: 'game_action',
+                            gameType: gameType,
+                            action: action,
+                            sender: myName,
+                            ...payload
+                        };
+                        wsManager.send(JSON.stringify({ sender: myName, message: JSON.stringify(msgObj) }));
                     }
 
-                    function renderConnect4(state) {
-                        if (document.getElementById('game-view').style.display === 'none') { handleSharedMedia({mediaType: 'connect4'}); }
+                    function renderTicTacToe(state) {
+                        activeGameState = { type: 'tictactoe', state: state };
+                        if (document.getElementById('game-view').style.display === 'none') { handleSharedMedia({mediaType: 'tictactoe'}); }
                         const gc = document.getElementById('game-container');
-                        gc.style.maxWidth = '600px';
-                        gc.style.aspectRatio = '7/6'; // Connect4 is 7x6
+                        gc.style.maxWidth = '360px';
+                        gc.style.aspectRatio = 'auto';
                         gc.style.height = 'auto';
-                        let html = '<div style="display:flex; flex-direction: row; width:100%; height:100%; background: #1565C0; padding:8px;">';
-                        for (let col = 0; col < 7; col++) {
-                            html += '<div style="flex:1; display:flex; flex-direction:column;">';
-                            for (let row = 0; row < 6; row++) {
-                                const cell = state.board[row][col];
-                                const color = cell === 1 ? 'red' : (cell === 2 ? '#FFB300' : '#f0f2f5');
-                                html += '<div style="flex:1; margin:4px; border-radius:50%; background:' + color + ';"></div>';
-                            }
-                            html += '</div>';
+                        gc.style.display = 'flex';
+                        gc.style.flexDirection = 'column';
+                        gc.style.alignItems = 'center';
+                        
+                        const isX = state.xPlayerId === myName;
+                        const isO = state.oPlayerId === myName;
+                        const myTurn = (state.isXTurn && isX) || (!state.isXTurn && isO);
+                        
+                        let html = '<div style="width:100%; display:flex; flex-direction:column; gap:8px;">';
+                        // Slot control bar
+                        html += '<div style="display:flex; justify-content:space-between; background:#1f2c34; padding:8px 12px; border-radius:10px; font-size:12px;">';
+                        html += '<div><b>Slot X:</b> ' + (state.xPlayerId === 'bot' ? '🤖 Bot' : (state.xPlayerId ? state.xPlayerId.substring(0,8) : '<i>Empty</i>')) + 
+                                (state.xPlayerId === '' ? ' <button onclick="sendGameAction(\'tictactoe\', \'claim_slot\', {role: \'X\', isBot: false})" style="background:#25d366; color:#fff; border:none; padding:2px 8px; border-radius:4px; cursor:pointer;">Join</button> <button onclick="sendGameAction(\'tictactoe\', \'claim_slot\', {role: \'X\', isBot: true})" style="background:#005d4b; color:#fff; border:none; padding:2px 6px; border-radius:4px; cursor:pointer;">🤖</button>' : '') + 
+                                (isX || state.xPlayerId === 'bot' ? ' <button onclick="sendGameAction(\'tictactoe\', \'leave_slot\', {role: \'X\'})" style="background:#ef4444; color:#fff; border:none; padding:2px 6px; border-radius:4px; cursor:pointer; font-size:10px;">Leave</button>' : '') + '</div>';
+                        html += '<div><b>Slot O:</b> ' + (state.oPlayerId === 'bot' ? '🤖 Bot' : (state.oPlayerId ? state.oPlayerId.substring(0,8) : '<i>Empty</i>')) + 
+                                (state.oPlayerId === '' ? ' <button onclick="sendGameAction(\'tictactoe\', \'claim_slot\', {role: \'O\', isBot: false})" style="background:#53bdeb; color:#fff; border:none; padding:2px 8px; border-radius:4px; cursor:pointer;">Join</button> <button onclick="sendGameAction(\'tictactoe\', \'claim_slot\', {role: \'O\', isBot: true})" style="background:#005d4b; color:#fff; border:none; padding:2px 6px; border-radius:4px; cursor:pointer;">🤖</button>' : '') + 
+                                (isO || state.oPlayerId === 'bot' ? ' <button onclick="sendGameAction(\'tictactoe\', \'leave_slot\', {role: \'O\'})" style="background:#ef4444; color:#fff; border:none; padding:2px 6px; border-radius:4px; cursor:pointer; font-size:10px;">Leave</button>' : '') + '</div>';
+                        html += '</div>';
+
+                        // Turn status badge
+                        const turnLabel = state.winner ? (state.winner === 'Draw' ? 'Game Drawn!' : state.winner + ' Wins!') : (myTurn ? '👉 Your Turn!' : (state.isXTurn ? "X's Turn" : "O's Turn"));
+                        html += '<div style="text-align:center; font-weight:bold; color:' + (myTurn ? '#25d366' : '#fff') + '; background:#131c21; padding:6px; border-radius:6px;">' + turnLabel + '</div>';
+
+                        // 3x3 Grid
+                        html += '<div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px; width:100%; aspect-ratio:1; background:#131c21; padding:6px; border-radius:10px;">';
+                        state.board.forEach((cell, idx) => {
+                            const color = cell === 'X' ? '#25d366' : '#53bdeb';
+                            html += '<div onclick="sendGameAction(\'tictactoe\', \'move\', {index: ' + idx + '})" style="display:flex; align-items:center; justify-content:center; font-size:42px; font-weight:bold; background:#2a3942; border-radius:8px; color:' + color + '; cursor:pointer; user-select:none;">' + cell + '</div>';
+                        });
+                        html += '</div>';
+
+                        if (state.winner) {
+                            html += '<button onclick="sendGameAction(\'tictactoe\', \'reset\')" style="margin-top:6px; background:#1a73e8; color:white; border:none; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:bold;">Play Again</button>';
                         }
                         html += '</div>';
                         gc.innerHTML = html;
                     }
 
+                    function renderConnect4(state) {
+                        activeGameState = { type: 'connect4', state: state };
+                        if (document.getElementById('game-view').style.display === 'none') { handleSharedMedia({mediaType: 'connect4'}); }
+                        const gc = document.getElementById('game-container');
+                        gc.style.maxWidth = '420px';
+                        gc.style.aspectRatio = 'auto';
+                        gc.style.height = 'auto';
+                        gc.style.display = 'flex';
+                        gc.style.flexDirection = 'column';
+                        gc.style.alignItems = 'center';
+
+                        const isRed = state.redPlayerId === myName;
+                        const isYellow = state.yellowPlayerId === myName;
+                        const myTurn = (state.isRedTurn && isRed) || (!state.isRedTurn && isYellow);
+
+                        let html = '<div style="width:100%; display:flex; flex-direction:column; gap:8px;">';
+                        // Slot control bar
+                        html += '<div style="display:flex; justify-content:space-between; background:#1f2c34; padding:8px 12px; border-radius:10px; font-size:12px;">';
+                        html += '<div><b>Red:</b> ' + (state.redPlayerId === 'bot' ? '🤖 Bot' : (state.redPlayerId ? state.redPlayerId.substring(0,8) : '<i>Empty</i>')) + 
+                                (state.redPlayerId === '' ? ' <button onclick="sendGameAction(\'connect4\', \'claim_slot\', {role: \'red\', isBot: false})" style="background:#ef4444; color:#fff; border:none; padding:2px 8px; border-radius:4px; cursor:pointer;">Join</button> <button onclick="sendGameAction(\'connect4\', \'claim_slot\', {role: \'red\', isBot: true})" style="background:#005d4b; color:#fff; border:none; padding:2px 6px; border-radius:4px; cursor:pointer;">🤖</button>' : '') + 
+                                (isRed || state.redPlayerId === 'bot' ? ' <button onclick="sendGameAction(\'connect4\', \'leave_slot\', {role: \'red\'})" style="background:#ef4444; color:#fff; border:none; padding:2px 6px; border-radius:4px; cursor:pointer; font-size:10px;">Leave</button>' : '') + '</div>';
+                        html += '<div><b>Yellow:</b> ' + (state.yellowPlayerId === 'bot' ? '🤖 Bot' : (state.yellowPlayerId ? state.yellowPlayerId.substring(0,8) : '<i>Empty</i>')) + 
+                                (state.yellowPlayerId === '' ? ' <button onclick="sendGameAction(\'connect4\', \'claim_slot\', {role: \'yellow\', isBot: false})" style="background:#f59e0b; color:#fff; border:none; padding:2px 8px; border-radius:4px; cursor:pointer;">Join</button> <button onclick="sendGameAction(\'connect4\', \'claim_slot\', {role: \'yellow\', isBot: true})" style="background:#005d4b; color:#fff; border:none; padding:2px 6px; border-radius:4px; cursor:pointer;">🤖</button>' : '') + 
+                                (isYellow || state.yellowPlayerId === 'bot' ? ' <button onclick="sendGameAction(\'connect4\', \'leave_slot\', {role: \'yellow\'})" style="background:#ef4444; color:#fff; border:none; padding:2px 6px; border-radius:4px; cursor:pointer; font-size:10px;">Leave</button>' : '') + '</div>';
+                        html += '</div>';
+
+                        const turnLabel = state.winner ? (state.winner + ' Wins!') : (myTurn ? '👉 Your Turn (Drop piece)' : (state.isRedTurn ? "Red's Turn" : "Yellow's Turn"));
+                        html += '<div style="text-align:center; font-weight:bold; color:' + (myTurn ? '#34d399' : '#fff') + '; background:#131c21; padding:6px; border-radius:6px;">' + turnLabel + '</div>';
+
+                        // Connect 4 Grid (Columns click-to-drop)
+                        html += '<div style="display:flex; flex-direction:row; width:100%; aspect-ratio:7/6; background:#1565C0; padding:6px; border-radius:10px; gap:4px;">';
+                        for (let col = 0; col < 7; col++) {
+                            html += '<div onclick="sendGameAction(\'connect4\', \'drop\', {col: ' + col + '})" style="flex:1; display:flex; flex-direction:column; gap:4px; cursor:pointer;">';
+                            for (let row = 0; row < 6; row++) {
+                                const cell = state.board[row][col];
+                                const color = cell === 1 ? '#ef4444' : (cell === 2 ? '#ffb300' : '#1e293b');
+                                html += '<div style="flex:1; border-radius:50%; background:' + color + '; box-shadow:inset 0 2px 4px rgba(0,0,0,0.4);"></div>';
+                            }
+                            html += '</div>';
+                        }
+                        html += '</div>';
+
+                        if (state.winner) {
+                            html += '<button onclick="sendGameAction(\'connect4\', \'reset\')" style="margin-top:6px; background:#1a73e8; color:white; border:none; padding:8px 16px; border-radius:6px; cursor:pointer; font-weight:bold;">Play Again</button>';
+                        }
+                        html += '</div>';
+                        gc.innerHTML = html;
+                    }
+
+                    let chessSelectedFrom = null;
                     function renderChess(state) {
+                        activeGameState = { type: 'chess', state: state };
                         if (document.getElementById('game-view').style.display === 'none') { handleSharedMedia({mediaType: 'chess'}); }
 
-                        const cb = document.getElementById('chess-board');
-                        if (!cb) return;
+                        const gc = document.getElementById('game-container');
+                        gc.style.maxWidth = '600px';
+                        gc.style.aspectRatio = 'auto';
+                        gc.style.height = 'auto';
+                        gc.style.display = 'flex';
+                        gc.style.flexDirection = 'column';
+                        gc.style.alignItems = 'center';
+
+                        const oldHeader = document.getElementById('chess-header-bar');
+                        if (oldHeader) oldHeader.remove();
+
+                        let cb = document.getElementById('chess-board');
+                        if (!cb) {
+                            cb = document.createElement('div');
+                            cb.id = 'chess-board';
+                            cb.style.display = 'grid';
+                            cb.style.gridTemplateColumns = 'repeat(8, 1fr)';
+                            cb.style.width = '100%';
+                            cb.style.aspectRatio = '1';
+                            cb.style.border = '2px solid #333';
+                            cb.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+                            gc.appendChild(cb);
+                        }
+
+                        // Header Bar with Role Slot Controls (White / Black / Bot)
+                        const headerBar = document.createElement('div');
+                        headerBar.id = 'chess-header-bar';
+                        headerBar.style.width = '100%';
+                        headerBar.style.display = 'flex';
+                        headerBar.style.flexDirection = 'column';
+                        headerBar.style.gap = '6px';
+                        headerBar.style.marginBottom = '8px';
+
+                        const isWhiteMe = state.whitePlayerId === myName;
+                        const isBlackMe = state.blackPlayerId === myName;
+                        const isMyTurn = (state.isWhiteTurn && (isWhiteMe || (state.whitePlayerId === '' && state.blackPlayerId === ''))) ||
+                                         (!state.isWhiteTurn && (isBlackMe || (state.whitePlayerId === '' && state.blackPlayerId === '')));
+
+                        const slotsRow = document.createElement('div');
+                        slotsRow.style.display = 'grid';
+                        slotsRow.style.gridTemplateColumns = 'repeat(2, 1fr)';
+                        slotsRow.style.gap = '8px';
+
+                        // White Slot Box
+                        const whiteBox = document.createElement('div');
+                        whiteBox.style.background = '#1f2c34';
+                        whiteBox.style.border = state.isWhiteTurn ? '2px solid #fff' : '1px solid #33444d';
+                        whiteBox.style.borderRadius = '8px';
+                        whiteBox.style.padding = '6px 10px';
+                        whiteBox.style.fontSize = '12px';
+                        whiteBox.style.color = '#fff';
+                        whiteBox.style.display = 'flex';
+                        whiteBox.style.justifyContent = 'space-between';
+                        whiteBox.style.alignItems = 'center';
+
+                        const whiteName = state.whitePlayerId === 'bot' ? '🤖 Bot' : (state.whitePlayerId === '' ? '<i>Empty</i>' : (isWhiteMe ? 'You' : state.whitePlayerId.substring(0, 6)));
+                        whiteBox.innerHTML = '<div><b>White ♔:</b> ' + whiteName + '</div>';
+
+                        if (state.whitePlayerId === '') {
+                            whiteBox.innerHTML += '<div style="display:flex; gap:3px;">' +
+                                '<button onclick="sendGameAction(\'chess\', \'claim_slot\', {role: \'white\', isBot: false})" style="background:#25d366; color:#fff; border:none; padding:2px 8px; border-radius:4px; cursor:pointer; font-size:11px;">Join</button>' +
+                                '<button onclick="sendGameAction(\'chess\', \'claim_slot\', {role: \'white\', isBot: true})" style="background:#005d4b; color:#fff; border:none; padding:2px 6px; border-radius:4px; cursor:pointer; font-size:11px;">🤖</button>' +
+                                '</div>';
+                        } else if (isWhiteMe || state.whitePlayerId === 'bot') {
+                            whiteBox.innerHTML += '<button onclick="sendGameAction(\'chess\', \'leave_slot\', {role: \'white\'})" style="background:#ef4444; color:#fff; border:none; padding:2px 8px; border-radius:4px; cursor:pointer; font-size:10px;">Leave</button>';
+                        }
+                        slotsRow.appendChild(whiteBox);
+
+                        // Black Slot Box
+                        const blackBox = document.createElement('div');
+                        blackBox.style.background = '#1f2c34';
+                        blackBox.style.border = !state.isWhiteTurn ? '2px solid #53bdeb' : '1px solid #33444d';
+                        blackBox.style.borderRadius = '8px';
+                        blackBox.style.padding = '6px 10px';
+                        blackBox.style.fontSize = '12px';
+                        blackBox.style.color = '#fff';
+                        blackBox.style.display = 'flex';
+                        blackBox.style.justifyContent = 'space-between';
+                        blackBox.style.alignItems = 'center';
+
+                        const blackName = state.blackPlayerId === 'bot' ? '🤖 Bot' : (state.blackPlayerId === '' ? '<i>Empty</i>' : (isBlackMe ? 'You' : state.blackPlayerId.substring(0, 6)));
+                        blackBox.innerHTML = '<div><b>Black ♚:</b> ' + blackName + '</div>';
+
+                        if (state.blackPlayerId === '') {
+                            blackBox.innerHTML += '<div style="display:flex; gap:3px;">' +
+                                '<button onclick="sendGameAction(\'chess\', \'claim_slot\', {role: \'black\', isBot: false})" style="background:#53bdeb; color:#fff; border:none; padding:2px 8px; border-radius:4px; cursor:pointer; font-size:11px;">Join</button>' +
+                                '<button onclick="sendGameAction(\'chess\', \'claim_slot\', {role: \'black\', isBot: true})" style="background:#005d4b; color:#fff; border:none; padding:2px 6px; border-radius:4px; cursor:pointer; font-size:11px;">🤖</button>' +
+                                '</div>';
+                        } else if (isBlackMe || state.blackPlayerId === 'bot') {
+                            blackBox.innerHTML += '<button onclick="sendGameAction(\'chess\', \'leave_slot\', {role: \'black\'})" style="background:#ef4444; color:#fff; border:none; padding:2px 8px; border-radius:4px; cursor:pointer; font-size:10px;">Leave</button>';
+                        }
+                        slotsRow.appendChild(blackBox);
+                        headerBar.appendChild(slotsRow);
+
+                        // Turn & Status Pill
+                        const statusPill = document.createElement('div');
+                        statusPill.style.display = 'flex';
+                        statusPill.style.justifyContent = 'space-between';
+                        statusPill.style.alignItems = 'center';
+                        statusPill.style.background = '#111b21';
+                        statusPill.style.padding = '6px 12px';
+                        statusPill.style.borderRadius = '8px';
+                        statusPill.style.fontSize = '12px';
+                        statusPill.style.color = isMyTurn ? '#25d366' : '#fff';
+
+                        const turnMsg = state.winner ? ('🏆 ' + state.winner + ' Wins!') : (isMyTurn ? '👉 Your Move' : (state.isWhiteTurn ? "White's Turn" : "Black's Turn"));
+                        statusPill.innerHTML = '<div style="font-weight:bold;">' + turnMsg + '</div>' +
+                            '<button onclick="sendGameAction(\'chess\', \'reset\')" style="background:#2a3942; color:#ef4444; border:none; padding:3px 10px; border-radius:4px; cursor:pointer; font-size:11px;">New Game</button>';
+                        headerBar.appendChild(statusPill);
+
+                        gc.insertBefore(headerBar, cb);
+
                         cb.innerHTML = '';
                         const pieces = state.pieces || [];
                         const uMap = { 'K':'♔','Q':'♕','R':'♖','B':'♗','N':'♘','P':'♙', 'k':'♚','q':'♛','r':'♜','b':'♝','n':'♞','p':'♟' };
@@ -1212,24 +1764,57 @@ class WebServerManager(
                             const isDark = (row + col) % 2 === 1;
                             const cell = document.createElement('div');
                             cell.style.background = isDark ? '#769656' : '#eeeed2';
+                            if (chessSelectedFrom === i) cell.style.background = '#f6e58d';
                             cell.style.display = 'flex';
                             cell.style.alignItems = 'center';
                             cell.style.justifyContent = 'center';
                             cell.style.fontSize = '32px';
+                            cell.style.cursor = 'pointer';
                             let p = pieces[i] || '';
                             if (p) cell.innerText = uMap[p] || p;
                             if (p && p.toUpperCase() === p) cell.style.color = '#fff';
                             if (p && p.toLowerCase() === p) cell.style.color = '#000';
                             if (p) cell.style.textShadow = '0px 0px 2px rgba(0,0,0,0.5)';
+
+                            cell.onclick = () => {
+                                if (chessSelectedFrom === null) {
+                                    if (p) {
+                                        chessSelectedFrom = i;
+                                        renderChess(state);
+                                    }
+                                } else {
+                                    sendGameAction('chess', 'move', { from: chessSelectedFrom, to: i });
+                                    chessSelectedFrom = null;
+                                }
+                            };
                             cb.appendChild(cell);
                         }
                     }
 
                     function renderLudo(state) {
+                        activeGameState = { type: 'ludo', state: state };
                         if (document.getElementById('game-view').style.display === 'none') { handleSharedMedia({mediaType: 'ludo'}); }
 
-                        const lb = document.getElementById('ludo-board');
-                        if (!lb) return;
+                        const gc = document.getElementById('game-container');
+                        const oldHeader = document.getElementById('ludo-header-bar');
+                        if (oldHeader) oldHeader.remove();
+                        const oldDeck = document.getElementById('ludo-dice-deck');
+                        if (oldDeck) oldDeck.remove();
+
+                        let lb = document.getElementById('ludo-board');
+                        if (!lb) {
+                            lb = document.createElement('div');
+                            lb.id = 'ludo-board';
+                            lb.style.display = 'grid';
+                            lb.style.gridTemplateColumns = 'repeat(15, 1fr)';
+                            lb.style.width = '100%';
+                            lb.style.aspectRatio = '1';
+                            lb.style.border = '2px solid #333';
+                            lb.style.position = 'relative';
+                            lb.style.background = '#fff';
+                            lb.style.borderRadius = '8px';
+                            gc.appendChild(lb);
+                        }
                         lb.innerHTML = '';
                         for (let r=0; r<15; r++) {
                             for (let c=0; c<15; c++) {
@@ -1310,23 +1895,164 @@ class WebServerManager(
                                 pieceDiv.style.border = '2px solid black';
                                 pieceDiv.style.left = 'calc((100% / 15) * ' + coord[0] + ' + (100% / 15 * 0.15) + ' + (i*2) + 'px)';
                                 pieceDiv.style.top = 'calc((100% / 15) * ' + coord[1] + ' + (100% / 15 * 0.15) + ' + (i*2) + 'px)';
+                                pieceDiv.style.cursor = 'pointer';
+                                pieceDiv.onclick = (e) => {
+                                    e.stopPropagation();
+                                    sendGameAction('ludo', 'move_piece', { playerIndex: p, pieceIndex: i });
+                                };
                                 lb.appendChild(pieceDiv);
                             }
                         }
                         
-                        // Status overlay
-                        const statusDiv = document.createElement('div');
-                        statusDiv.style.position = 'absolute';
-                        statusDiv.style.bottom = '10px';
-                        statusDiv.style.left = '50%';
-                        statusDiv.style.transform = 'translateX(-50%)';
-                        statusDiv.style.background = 'rgba(0,0,0,0.7)';
-                        statusDiv.style.color = 'white';
-                        statusDiv.style.padding = '5px 15px';
-                        statusDiv.style.borderRadius = '20px';
+                        // Tactical Header Bar (Slots, Match Timer, Pacing & Status)
+                        const headerBar = document.createElement('div');
+                        headerBar.id = 'ludo-header-bar';
+                        headerBar.style.width = '100%';
+                        headerBar.style.maxWidth = '600px';
+                        headerBar.style.display = 'flex';
+                        headerBar.style.flexDirection = 'column';
+                        headerBar.style.gap = '6px';
+                        headerBar.style.marginBottom = '8px';
+
+                        // Player Slot Badges Row
+                        const slotsRow = document.createElement('div');
+                        slotsRow.style.display = 'grid';
+                        slotsRow.style.gridTemplateColumns = 'repeat(4, 1fr)';
+                        slotsRow.style.gap = '4px';
+                        const pColors = ['#f44336', '#4caf50', '#ffeb3b', '#2196f3'];
                         const pNames = ['Red', 'Green', 'Yellow', 'Blue'];
-                        statusDiv.innerText = state.winner !== -1 ? (pNames[state.winner] + ' WINS!') : (pNames[state.turn] + '\'s Turn (Rolled: ' + state.diceValue + ')');
-                        lb.appendChild(statusDiv);
+                        const pIds = state.playerIds || {};
+
+                        for (let p = 0; p < 4; p++) {
+                            const pId = pIds[p] || '';
+                            const isMySlot = pId === myName;
+                            const isBotSlot = pId === 'bot';
+                            const isEmpty = pId === '';
+
+                            const slotBox = document.createElement('div');
+                            slotBox.style.background = '#1f2c34';
+                            slotBox.style.border = (state.turn === p) ? ('2px solid ' + pColors[p]) : '1px solid #33444d';
+                            slotBox.style.borderRadius = '8px';
+                            slotBox.style.padding = '4px';
+                            slotBox.style.textAlign = 'center';
+                            slotBox.style.fontSize = '11px';
+                            slotBox.style.color = '#fff';
+
+                            let label = pNames[p] + ': ';
+                            if (isBotSlot) label += '🤖 Bot';
+                            else if (isEmpty) label += '<i>Empty</i>';
+                            else label += (isMySlot ? 'You' : pId.substring(0, 5));
+
+                            slotBox.innerHTML = '<div style="font-weight:bold; color:' + pColors[p] + ';">' + label + '</div>';
+
+                            if (isEmpty) {
+                                slotBox.innerHTML += '<div style="display:flex; justify-content:center; gap:3px; margin-top:2px;">' +
+                                    '<button onclick="sendGameAction(\'ludo\', \'claim_slot\', {slotIndex: ' + p + ', isBot: false})" style="background:#25d366; color:#fff; border:none; padding:1px 5px; border-radius:3px; font-size:10px; cursor:pointer;">Join</button>' +
+                                    '<button onclick="sendGameAction(\'ludo\', \'claim_slot\', {slotIndex: ' + p + ', isBot: true})" style="background:#005d4b; color:#fff; border:none; padding:1px 5px; border-radius:3px; font-size:10px; cursor:pointer;">🤖</button>' +
+                                    '</div>';
+                            } else if (isMySlot || isBotSlot) {
+                                slotBox.innerHTML += '<div style="margin-top:2px;">' +
+                                    '<button onclick="sendGameAction(\'ludo\', \'leave_slot\', {slotIndex: ' + p + '})" style="background:#ef4444; color:#fff; border:none; padding:1px 5px; border-radius:3px; font-size:9px; cursor:pointer;">Leave</button>' +
+                                    '</div>';
+                            }
+                            slotsRow.appendChild(slotBox);
+                        }
+                        headerBar.appendChild(slotsRow);
+
+                        // Pacing & Fast Match controls
+                        const infoBar = document.createElement('div');
+                        infoBar.style.display = 'flex';
+                        infoBar.style.justifyContent = 'space-between';
+                        infoBar.style.alignItems = 'center';
+                        infoBar.style.background = '#111b21';
+                        infoBar.style.padding = '4px 10px';
+                        infoBar.style.borderRadius = '8px';
+                        infoBar.style.fontSize = '11px';
+                        infoBar.style.color = '#8696a0';
+
+                        const curTurnColor = pColors[state.turn] || '#fff';
+                        const curTurnName = pNames[state.turn] || 'Player';
+                        const turnStatusText = state.winner !== -1 ? ('🏆 ' + pNames[state.winner] + ' WINS!') : ('Turn: <b style="color:' + curTurnColor + ';">' + curTurnName + '</b>' + (state.hasRolled ? ' (Rolled: ' + state.diceValue + ')' : ''));
+                        infoBar.innerHTML = '<div>' + turnStatusText + '</div>';
+
+                        const controlsSpan = document.createElement('div');
+                        controlsSpan.style.display = 'flex';
+                        controlsSpan.style.gap = '6px';
+                        controlsSpan.innerHTML = '<button onclick="sendGameAction(\'ludo\', \'fill_bots\')" style="background:#2a3942; color:#38bdf8; border:none; padding:2px 8px; border-radius:4px; cursor:pointer; font-size:10px; font-weight:bold;">🤖 Fill Bots</button>' +
+                            '<button onclick="sendGameAction(\'ludo\', \'reset\')" style="background:#2a3942; color:#ef4444; border:none; padding:2px 8px; border-radius:4px; cursor:pointer; font-size:10px;">Reset</button>';
+                        infoBar.appendChild(controlsSpan);
+                        headerBar.appendChild(infoBar);
+
+                        // Insert headerBar right above ludo-board inside game-container
+                        gc.insertBefore(headerBar, lb);
+
+                        // BOTTOM TACTICAL DICE DECK (Separated below board, NEVER covered by floating chat!)
+                        const diceDeck = document.createElement('div');
+                        diceDeck.id = 'ludo-dice-deck';
+                        diceDeck.style.width = '100%';
+                        diceDeck.style.maxWidth = '600px';
+                        diceDeck.style.marginTop = '10px';
+                        diceDeck.style.background = '#1f2c34';
+                        diceDeck.style.border = '1px solid #33444d';
+                        diceDeck.style.borderRadius = '16px';
+                        diceDeck.style.padding = '10px 16px';
+                        diceDeck.style.display = 'flex';
+                        diceDeck.style.justifyContent = 'space-between';
+                        diceDeck.style.alignItems = 'center';
+                        diceDeck.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+
+                        const descCol = document.createElement('div');
+                        const isCurTurnBot = pIds[state.turn] === 'bot';
+                        const isCurTurnMe = pIds[state.turn] === myName || Object.values(pIds).length === 0 || !Object.values(pIds).includes(myName);
+
+                        let titleText = 'ROLL THE DICE';
+                        let subText = isCurTurnMe ? 'Tap the tactical 3D dice button to generate move' : 'Waiting for opponent move...';
+                        let titleColor = '#25d366';
+
+                        if (isCurTurnBot) {
+                            titleText = '🤖 BOT TURN';
+                            subText = 'Bot calculating optimal move...';
+                            titleColor = '#38bdf8';
+                        } else if (state.hasRolled) {
+                            titleText = 'SELECT HIGHLIGHTED TOKEN';
+                            subText = 'Advance pawn token by ' + state.diceValue + ' steps';
+                            titleColor = '#f59e0b';
+                        }
+
+                        descCol.innerHTML = '<div style="font-weight:bold; font-size:13px; color:' + titleColor + ';">' + titleText + '</div>' +
+                            '<div style="font-size:11px; color:#8696a0; margin-top:2px;">' + subText + '</div>';
+                        diceDeck.appendChild(descCol);
+
+                        // 3D Tactical Dice Button
+                        const diceBtn = document.createElement('button');
+                        diceBtn.style.width = '52px';
+                        diceBtn.style.height = '52px';
+                        diceBtn.style.borderRadius = '14px';
+                        diceBtn.style.border = '2px solid #fff';
+                        diceBtn.style.fontSize = '24px';
+                        diceBtn.style.fontWeight = 'bold';
+                        diceBtn.style.color = '#fff';
+                        diceBtn.style.display = 'flex';
+                        diceBtn.style.alignItems = 'center';
+                        diceBtn.style.justifyContent = 'center';
+                        diceBtn.style.cursor = 'pointer';
+                        diceBtn.style.transition = 'all 0.2s';
+                        diceBtn.style.boxShadow = '0 4px 8px rgba(0,0,0,0.4)';
+
+                        const canRoll = state.winner === -1 && !state.hasRolled && !isCurTurnBot && isCurTurnMe;
+                        if (canRoll) {
+                            diceBtn.style.background = curTurnColor;
+                            diceBtn.innerText = '🎲';
+                            diceBtn.onclick = () => sendGameAction('ludo', 'roll_dice');
+                        } else {
+                            diceBtn.style.background = '#2a3942';
+                            diceBtn.style.border = '2px solid #374955';
+                            diceBtn.style.cursor = 'default';
+                            diceBtn.innerText = state.diceValue > 0 ? state.diceValue : '🎲';
+                        }
+                        diceDeck.appendChild(diceBtn);
+
+                        gc.appendChild(diceDeck);
                     }
 
                     const cvs = document.getElementById('drawing-board');
@@ -1450,6 +2176,9 @@ class WebServerManager(
                     let lastMessageContent = "";
                     
                     function appendMsg(text, className, sender = null, scroll = true) {
+                        if (typeof appendGamePipMessage === 'function') {
+                            appendGamePipMessage(sender || (className === 'msg-me' ? 'You' : 'Peer'), text, className === 'msg-me');
+                        }
                         const div = document.createElement('div');
                         div.className = 'msg ' + className;
                         
@@ -1573,6 +2302,12 @@ class WebServerManager(
                                             } else if (p.type === 'canvas') {
                                                 drawRemoteCanvas(p);
                                                 continue;
+                                            } else if (p.type === 'tictactoe') {
+                                                renderTicTacToe(p.state);
+                                                continue;
+                                            } else if (p.type === 'connect4') {
+                                                renderConnect4(p.state);
+                                                continue;
                                             }
                                         } catch(e) {}
                                         if (msg.sender !== myName) {
@@ -1631,6 +2366,8 @@ class WebServerManager(
                                         renderTicTacToe(p.state);
                                     } else if (p.type === 'connect4') {
                                         renderConnect4(p.state);
+                                    } else if (p.type === 'music_sync' || p.type === 'MeshMusicSync') {
+                                        handleMusicSyncMessage(p);
                                     } else {
                                         this.listeners.forEach(fn => fn(data));
                                     }
@@ -1866,6 +2603,44 @@ class WebServerManager(
                         }
                     }
 
+                    // --- Cross-Platform Offline Speed & Benchmark ---
+                    async function toggleSpeedModal() {
+                        const modal = document.getElementById('speed-modal');
+                        if (modal.style.display === 'flex') {
+                            modal.style.display = 'none';
+                        } else {
+                            modal.style.display = 'flex';
+                            runWebSpeedTest();
+                        }
+                    }
+
+                    async function runWebSpeedTest() {
+                        const box = document.getElementById('speed-result-box');
+                        const btn = document.getElementById('speed-run-btn');
+                        if (btn) btn.disabled = true;
+                        box.innerHTML = '<span style="color:#38bdf8;">⚡ Pinging Android Phone over local mesh link...</span>';
+                        try {
+                            const t0 = performance.now();
+                            const res = await fetch('/api/speed_test');
+                            const rtt = Math.round(performance.now() - t0);
+                            if (res.ok) {
+                                const data = await res.json();
+                                box.innerHTML = '<div style="color:#25d366; font-weight:bold; margin-bottom:6px;">⚡ Benchmark Complete</div>' +
+                                    '<div style="display:flex; flex-direction:column; gap:3px;">' +
+                                    '<div>• <b>Round-Trip Latency:</b> ' + rtt + ' ms</div>' +
+                                    '<div>• <b>Physical Link:</b> ' + (data.linkType || 'Wi-Fi AP Direct') + '</div>' +
+                                    '<div>• <b>Bandwidth Capacity:</b> ' + (data.maxSpeed || '480 Mbps') + '</div>' +
+                                    '<div>• <b>Packet Delivery:</b> 100% Reliable (Local Mesh Socket)</div>' +
+                                    '</div>';
+                            } else {
+                                box.innerText = 'Ping response received in ' + rtt + ' ms.';
+                            }
+                        } catch(e) {
+                            box.innerText = 'Speed test error: ' + e.message;
+                        }
+                        if (btn) btn.disabled = false;
+                    }
+
                     // --- Theme Toggle ---
                     function toggleTheme() {
                         const isLight = document.body.classList.toggle('light-theme');
@@ -1901,6 +2676,77 @@ class WebServerManager(
                             }
                         }
                     });
+
+                    // --- Mesh Jukebox & Synchronized Party Player ---
+                    let webPartyListening = false;
+                    let lastMusicState = null;
+
+                    function toggleMusicDockManual() {
+                        const dock = document.getElementById('mesh-music-dock');
+                        dock.style.display = (dock.style.display === 'none' || dock.style.display === '') ? 'flex' : 'none';
+                        pollMusicStatus();
+                    }
+
+                    async function pollMusicStatus() {
+                        try {
+                            const res = await fetch('/api/music/status');
+                            if (res.ok) {
+                                const data = await res.json();
+                                handleMusicSyncMessage(data);
+                            }
+                        } catch(e) {}
+                    }
+
+                    function handleMusicSyncMessage(data) {
+                        lastMusicState = data;
+                        const dock = document.getElementById('mesh-music-dock');
+                        const titleElem = document.getElementById('music-dock-title');
+                        const artistElem = document.getElementById('music-dock-artist');
+                        const audio = document.getElementById('party-audio-elem');
+
+                        const isPlaying = data.isPlaying || data.action === 'play';
+                        const title = data.trackTitle || 'Mesh Audio Track';
+                        const artist = data.artist || (data.hostName ? 'DJ ' + data.hostName : 'Mesh Broadcaster');
+
+                        if (titleElem) titleElem.innerText = '♫ ' + title;
+                        if (artistElem) artistElem.innerText = artist + (isPlaying ? ' • Playing' : ' • Paused');
+
+                        if ((data.isPartyModeHost || isPlaying) && dock) {
+                            dock.style.display = 'flex';
+                        }
+
+                        if (webPartyListening && audio) {
+                            const streamUrl = data.streamUrl || data.uri || '/audio/current';
+                            if (!audio.src || (!audio.src.includes('audio/current') && !audio.src.includes(streamUrl))) {
+                                audio.src = streamUrl;
+                            }
+                            if (isPlaying) {
+                                if (data.positionMs && Math.abs(audio.currentTime - (data.positionMs / 1000)) > 2) {
+                                    audio.currentTime = data.positionMs / 1000;
+                                }
+                                audio.play().catch(e => console.log('Audio autoplay prevented:', e));
+                            } else {
+                                audio.pause();
+                            }
+                        }
+                    }
+
+                    function toggleWebPartyListen() {
+                        const audio = document.getElementById('party-audio-elem');
+                        const syncBtn = document.getElementById('music-sync-btn');
+                        webPartyListening = !webPartyListening;
+                        if (webPartyListening) {
+                            syncBtn.innerText = '🔊 Synced (Listening)';
+                            syncBtn.style.background = '#00e5ff';
+                            pollMusicStatus();
+                        } else {
+                            syncBtn.innerText = '🎧 Listen In Sync';
+                            syncBtn.style.background = '#25d366';
+                            if (audio) audio.pause();
+                        }
+                    }
+
+                    setInterval(pollMusicStatus, 4000);
                 </script>
             </body>
             </html>

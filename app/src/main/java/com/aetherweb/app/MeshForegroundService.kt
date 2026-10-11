@@ -34,6 +34,12 @@ object MeshNetworkManager {
         private set
     val meshRouter = MeshRouter(localNodeId, cryptoManager)
 
+    init {
+        meshRouter.onPacketRouted = {
+            _uiState.update { it.copy(packetsRoutedCount = it.packetsRoutedCount + 1) }
+        }
+    }
+
     private var identityInitialized = false
 
     /**
@@ -58,6 +64,35 @@ object MeshNetworkManager {
     var roomAesKey: javax.crypto.SecretKey? = null
     var myRsaKeyPair: java.security.KeyPair? = null
 
+    var webSessionSalt: ByteArray = CryptoManager.generateSalt()
+    var webSessionPin: String = String.format("%06d", (100000..999999).random())
+    var webSessionKey: javax.crypto.SecretKey? = null
+    var webSessionKeyHex: String = ""
+    var webSessionSaltHex: String = ""
+    var webSessionFingerprint: String = ""
+
+    fun initializeWebSessionKeys(regenerate: Boolean = false) {
+        if (webSessionKey == null || regenerate) {
+            webSessionSalt = CryptoManager.generateSalt()
+            webSessionPin = String.format("%06d", (100000..999999).random())
+            val derived = CryptoManager.deriveKeyFromPin(webSessionPin, webSessionSalt)
+            webSessionKey = derived
+            webSessionKeyHex = CryptoManager.bytesToHex(derived.encoded)
+            webSessionSaltHex = CryptoManager.bytesToHex(webSessionSalt)
+            webSessionFingerprint = CryptoManager.fingerprint(derived)
+            _uiState.update {
+                it.copy(
+                    webSessionPin = webSessionPin,
+                    webSessionKeyHex = webSessionKeyHex,
+                    webSessionSaltHex = webSessionSaltHex,
+                    webSessionFingerprint = webSessionFingerprint,
+                    isWebE2eeArmed = true
+                )
+            }
+            android.util.Log.i("MeshNetworkManager", "E2EE WebCrypto initialized. PIN: $webSessionPin, Fingerprint: $webSessionFingerprint")
+        }
+    }
+
     fun initializeKeys() {
         if (myRsaKeyPair == null) {
             myRsaKeyPair = CryptoManager.generateRSAKeyPair()
@@ -65,6 +100,7 @@ object MeshNetworkManager {
         if (roomAesKey == null) {
             roomAesKey = CryptoManager.generateAESKey()
         }
+        initializeWebSessionKeys()
     }
 
     @SuppressLint("StaticFieldLeak")
@@ -88,6 +124,108 @@ object MeshNetworkManager {
         try { bleMeshManager?.notifyWebBleGuests(text, sender) } catch (e: Exception) { }
     }
 
+    fun kickParticipant(idOrIp: String, displayName: String = idOrIp) {
+        webServerManager?.disconnectClient(idOrIp)
+        wifiSocketManager?.disconnectClient(idOrIp)
+        _uiState.update { state ->
+            val nextApproved = state.approvedSpectators.filter { it != idOrIp }
+            val nextVoice = state.approvedVoiceGuests.filter { it != idOrIp }
+            val nextNodes = state.connectedNodes.filter { it.id != idOrIp }
+            state.copy(
+                approvedSpectators = nextApproved,
+                approvedVoiceGuests = nextVoice,
+                connectedNodes = nextNodes,
+                pendingSpectators = state.pendingSpectators.filter { it.ip != idOrIp },
+                pendingVoiceRequests = state.pendingVoiceRequests.filter { it.ip != idOrIp },
+                kickedIps = state.kickedIps + idOrIp,
+                messages = state.messages + ChatMessage(
+                    senderName = "System",
+                    senderId = "system",
+                    message = "🚫 Host removed & blocked participant: $displayName",
+                    isFromMe = false
+                )
+            )
+        }
+    }
+
+    fun handleWifiPeerDisconnected(disconnectedIp: String) {
+        val currentState = _uiState.value
+        if (!currentState.isHotspotActive) return
+
+        // 1. Tic-Tac-Toe disconnect fallback to bot
+        var tttChanged = false
+        var ttt = currentState.ticTacToeState
+        if (ttt.xPlayerId.contains(disconnectedIp) || (ttt.xPlayerId.isNotEmpty() && ttt.xPlayerId != localNodeId && ttt.xPlayerId != "bot" && !currentState.connectedNodes.any { it.id == ttt.xPlayerId })) {
+            ttt = ttt.copy(xPlayerId = "bot")
+            tttChanged = true
+        }
+        if (ttt.oPlayerId.contains(disconnectedIp) || (ttt.oPlayerId.isNotEmpty() && ttt.oPlayerId != localNodeId && ttt.oPlayerId != "bot" && !currentState.connectedNodes.any { it.id == ttt.oPlayerId })) {
+            ttt = ttt.copy(oPlayerId = "bot")
+            tttChanged = true
+        }
+        if (tttChanged) {
+            _uiState.update { it.copy(ticTacToeState = ttt) }
+            val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("tictactoe", ttt.toJson())
+            meshRouter.routePacket(packet)
+            fanOutToGuests(packet.toJsonString(), "Host")
+        }
+
+        // 2. Connect 4 disconnect fallback to bot
+        var c4Changed = false
+        var c4 = currentState.connect4State
+        if (c4.redPlayerId.contains(disconnectedIp) || (c4.redPlayerId.isNotEmpty() && c4.redPlayerId != localNodeId && c4.redPlayerId != "bot" && !currentState.connectedNodes.any { it.id == c4.redPlayerId })) {
+            c4 = c4.copy(redPlayerId = "bot")
+            c4Changed = true
+        }
+        if (c4.yellowPlayerId.contains(disconnectedIp) || (c4.yellowPlayerId.isNotEmpty() && c4.yellowPlayerId != localNodeId && c4.yellowPlayerId != "bot" && !currentState.connectedNodes.any { it.id == c4.yellowPlayerId })) {
+            c4 = c4.copy(yellowPlayerId = "bot")
+            c4Changed = true
+        }
+        if (c4Changed) {
+            _uiState.update { it.copy(connect4State = c4) }
+            val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("connect4", c4.toJson())
+            meshRouter.routePacket(packet)
+            fanOutToGuests(packet.toJsonString(), "Host")
+        }
+
+        // 3. Chess disconnect fallback to bot
+        var chessChanged = false
+        var chess = currentState.chessState
+        if (chess.whitePlayerId.contains(disconnectedIp) || (chess.whitePlayerId.isNotEmpty() && chess.whitePlayerId != localNodeId && chess.whitePlayerId != "bot" && !currentState.connectedNodes.any { it.id == chess.whitePlayerId })) {
+            chess = chess.copy(whitePlayerId = "bot")
+            chessChanged = true
+        }
+        if (chess.blackPlayerId.contains(disconnectedIp) || (chess.blackPlayerId.isNotEmpty() && chess.blackPlayerId != localNodeId && chess.blackPlayerId != "bot" && !currentState.connectedNodes.any { it.id == chess.blackPlayerId })) {
+            chess = chess.copy(blackPlayerId = "bot")
+            chessChanged = true
+        }
+        if (chessChanged) {
+            _uiState.update { it.copy(chessState = chess) }
+            val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("chess", chess.toJson().toString())
+            meshRouter.routePacket(packet)
+            fanOutToGuests(packet.toJsonString(), "Host")
+        }
+
+        // 4. Ludo disconnect fallback to bot
+        var ludoChanged = false
+        var ludo = currentState.ludoState
+        val updatedIds = ludo.playerIds.toMutableMap()
+        for (i in 0..3) {
+            val pid = updatedIds[i] ?: ""
+            if (pid.contains(disconnectedIp) || (pid.isNotEmpty() && pid != localNodeId && pid != "bot" && !currentState.connectedNodes.any { it.id == pid })) {
+                updatedIds[i] = "bot"
+                ludoChanged = true
+            }
+        }
+        if (ludoChanged) {
+            ludo = ludo.copy(playerIds = updatedIds)
+            _uiState.update { it.copy(ludoState = ludo) }
+            val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("ludo", ludo.toJson().toString())
+            meshRouter.routePacket(packet)
+            fanOutToGuests(packet.toJsonString(), "Host")
+        }
+    }
+
     fun initialize(context: Context) {
         if (isInitialized) return
         isInitialized = true
@@ -97,10 +235,205 @@ object MeshNetworkManager {
 
         val appContext = context.applicationContext
 
+        // Handle Web Game Actions (moves, slot claims, rolls)
+        fun handleWebGameAction(json: JSONObject, sender: String): Boolean {
+            val gameType = json.optString("gameType")
+            val action = json.optString("action")
+            val currentState = MeshNetworkManager._uiState.value
+
+            when (gameType) {
+                "tictactoe" -> {
+                    var state = currentState.ticTacToeState
+                    when (action) {
+                        "claim_slot" -> {
+                            val role = json.optString("role")
+                            val isBot = json.optBoolean("isBot", false)
+                            val occupant = if (isBot) "bot" else sender
+                            state = if (role == "X") state.copy(xPlayerId = occupant) else state.copy(oPlayerId = occupant)
+                        }
+                        "leave_slot" -> {
+                            val role = json.optString("role")
+                            state = if (role == "X") state.copy(xPlayerId = "") else state.copy(oPlayerId = "")
+                        }
+                        "move" -> {
+                            val idx = json.optInt("index", -1)
+                            if (idx in 0..8 && state.board[idx].isEmpty() && state.winner.isEmpty()) {
+                                val isX = state.xPlayerId == sender || state.xPlayerId.isEmpty()
+                                val isO = state.oPlayerId == sender || state.oPlayerId.isEmpty()
+                                if (state.isXTurn && isX) {
+                                    val newB = state.board.toMutableList()
+                                    newB[idx] = "X"
+                                    state = state.copy(board = newB, isXTurn = false).checkWinner()
+                                } else if (!state.isXTurn && isO) {
+                                    val newB = state.board.toMutableList()
+                                    newB[idx] = "O"
+                                    state = state.copy(board = newB, isXTurn = true).checkWinner()
+                                }
+                            }
+                        }
+                        "reset" -> {
+                            state = com.aetherweb.app.TicTacToeState(
+                                xPlayerId = state.xPlayerId,
+                                oPlayerId = state.oPlayerId
+                            )
+                        }
+                    }
+                    MeshNetworkManager._uiState.update { it.copy(ticTacToeState = state) }
+                    val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("tictactoe", state.toJson())
+                    MeshNetworkManager.meshRouter.routePacket(packet)
+                    fanOutToGuests(packet.toJsonString(), "Host")
+                    return true
+                }
+                "connect4" -> {
+                    var state = currentState.connect4State
+                    when (action) {
+                        "claim_slot" -> {
+                            val role = json.optString("role")
+                            val isBot = json.optBoolean("isBot", false)
+                            val occupant = if (isBot) "bot" else sender
+                            state = if (role == "red") state.copy(redPlayerId = occupant) else state.copy(yellowPlayerId = occupant)
+                        }
+                        "leave_slot" -> {
+                            val role = json.optString("role")
+                            state = if (role == "red") state.copy(redPlayerId = "") else state.copy(yellowPlayerId = "")
+                        }
+                        "drop" -> {
+                            val col = json.optInt("col", -1)
+                            if (col in 0..6 && state.winner.isEmpty() && state.board[0][col] == 0) {
+                                val isRed = state.redPlayerId == sender || state.redPlayerId.isEmpty()
+                                val isYellow = state.yellowPlayerId == sender || state.yellowPlayerId.isEmpty()
+                                if ((state.isRedTurn && isRed) || (!state.isRedTurn && isYellow)) {
+                                    val piece = if (state.isRedTurn) 1 else 2
+                                    val newBoard = state.board.map { it.toMutableList() }
+                                    for (r in 5 downTo 0) {
+                                        if (newBoard[r][col] == 0) {
+                                            newBoard[r][col] = piece
+                                            break
+                                        }
+                                    }
+                                    state = state.copy(board = newBoard, isRedTurn = !state.isRedTurn).checkWinner()
+                                }
+                            }
+                        }
+                        "reset" -> {
+                            state = com.aetherweb.app.Connect4State(
+                                redPlayerId = state.redPlayerId,
+                                yellowPlayerId = state.yellowPlayerId
+                            )
+                        }
+                    }
+                    MeshNetworkManager._uiState.update { it.copy(connect4State = state) }
+                    val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("connect4", state.toJson())
+                    MeshNetworkManager.meshRouter.routePacket(packet)
+                    fanOutToGuests(packet.toJsonString(), "Host")
+                    return true
+                }
+                "chess" -> {
+                    var state = currentState.chessState
+                    when (action) {
+                        "claim_slot" -> {
+                            val role = json.optString("role")
+                            val isBot = json.optBoolean("isBot", false)
+                            val occupant = if (isBot) "bot" else sender
+                            state = if (role == "white") state.copy(whitePlayerId = occupant) else state.copy(blackPlayerId = occupant)
+                        }
+                        "leave_slot" -> {
+                            val role = json.optString("role")
+                            state = if (role == "white") state.copy(whitePlayerId = "") else state.copy(blackPlayerId = "")
+                        }
+                        "reset" -> {
+                            state = com.aetherweb.app.ChessEngine.reset().copy(
+                                whitePlayerId = state.whitePlayerId,
+                                blackPlayerId = state.blackPlayerId
+                            )
+                        }
+                        "move" -> {
+                            val from = json.optInt("from", -1)
+                            val to = json.optInt("to", -1)
+                            if (from in 0..63 && to in 0..63) {
+                                val pieces = state.pieces.toMutableList()
+                                val moving = pieces[from]
+                                pieces[to] = moving
+                                pieces[from] = ""
+                                state = state.copy(pieces = pieces, isWhiteTurn = !state.isWhiteTurn)
+                            }
+                        }
+                    }
+                    MeshNetworkManager._uiState.update { it.copy(chessState = state) }
+                    val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("chess", state.toJson().toString())
+                    MeshNetworkManager.meshRouter.routePacket(packet)
+                    fanOutToGuests(packet.toJsonString(), "Host")
+                    return true
+                }
+                "ludo" -> {
+                    var state = currentState.ludoState
+                    when (action) {
+                        "claim_slot" -> {
+                            val slot = json.optInt("slotIndex", -1)
+                            val isBot = json.optBoolean("isBot", false)
+                            if (slot in 0..3) {
+                                val newMap = state.playerIds.toMutableMap()
+                                newMap[slot] = if (isBot) "bot" else sender
+                                state = state.copy(playerIds = newMap)
+                            }
+                        }
+                        "leave_slot" -> {
+                            val slot = json.optInt("slotIndex", -1)
+                            if (slot in 0..3) {
+                                val newMap = state.playerIds.toMutableMap()
+                                newMap.remove(slot)
+                                state = state.copy(playerIds = newMap)
+                            }
+                        }
+                        "fill_bots" -> {
+                            val newMap = state.playerIds.toMutableMap()
+                            for (p in 0..3) {
+                                if (!newMap.containsKey(p)) {
+                                    newMap[p] = "bot"
+                                }
+                            }
+                            state = state.copy(playerIds = newMap)
+                        }
+                        "reset" -> {
+                            state = com.aetherweb.app.LudoState(playerIds = state.playerIds)
+                        }
+                        "roll_dice" -> {
+                            if (!state.hasRolled && state.winner == -1) {
+                                val roll = (1..6).random()
+                                state = state.copy(diceValue = roll, hasRolled = true)
+                            }
+                        }
+                        "move_piece" -> {
+                            val playerIdx = json.optInt("playerIndex", -1)
+                            val pieceIdx = json.optInt("pieceIndex", -1)
+                            if (playerIdx in 0..3 && pieceIdx in 0..3 && state.hasRolled && state.turn == playerIdx) {
+                                state = com.aetherweb.app.LudoEngine.movePiece(state, playerIdx, pieceIdx)
+                            }
+                        }
+                    }
+                    MeshNetworkManager._uiState.update { it.copy(ludoState = state) }
+                    val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("ludo", state.toJson().toString())
+                    MeshNetworkManager.meshRouter.routePacket(packet)
+                    fanOutToGuests(packet.toJsonString(), "Host")
+                    return true
+                }
+            }
+            return false
+        }
+
         // Door 4: single handler for guest chat arriving over any web transport
         // (WebSocket via WebServerManager, or BLE GATT via BleMeshManager).
         // Shared by both managers so every guest message gets identical handling.
         val handleGuestChat: (String, String) -> Unit = msgLambda@ { text, sender ->
+                try {
+                    val rootJson = org.json.JSONObject(text)
+                    if (rootJson.optString("type") == "game_action") {
+                        if (handleWebGameAction(rootJson, sender)) {
+                            return@msgLambda
+                        }
+                    }
+                } catch (e: Exception) { }
+
                 try {
                     val packet = com.aetherweb.app.protocol.MeshPacketCodec.decode(text)
                     if (packet !is com.aetherweb.app.protocol.MeshPacket.Raw) {
@@ -140,6 +473,11 @@ object MeshNetworkManager {
             context = appContext,
             onClientConnected = { ip ->
                 val state = _uiState.value
+                val currentCount = 1 + state.approvedSpectators.size + state.connectedNodes.size
+                val isFull = state.roomCapacityLimit > 0 && currentCount >= state.roomCapacityLimit
+                if (state.isRoomSealed || isFull || state.kickedIps.contains(ip)) {
+                    return@WebServerManager
+                }
                 if (!state.approvedSpectators.contains(ip)) {
                     if (state.pendingSpectators.none { it.ip == ip }) {
                         // Voice Room Phase 1: request carries a temp profile (name filled in
@@ -171,16 +509,26 @@ object MeshNetworkManager {
             isApproved = { ip -> _uiState.value.approvedSpectators.contains(ip) },
             // Voice Room Phase 3: gate for the /ws-voice SFU.
             isVoiceApproved = { ip -> _uiState.value.approvedVoiceGuests.contains(ip) },
+            isRoomFullOrSealed = { ip ->
+                val s = _uiState.value
+                val currentCount = 1 + s.approvedSpectators.size + s.connectedNodes.size
+                !s.approvedSpectators.contains(ip) && (s.isRoomSealed || (s.roomCapacityLimit > 0 && currentCount >= s.roomCapacityLimit))
+            },
+            isKicked = { ip -> _uiState.value.kickedIps.contains(ip) },
             getChatHistory = {
                 _uiState.value.messages.takeLast(50).map { Pair(it.senderName, it.message) }
             },
             onMessageReceived = { text, sender -> handleGuestChat(text, "$sender \uD83C\uDF10") },
- )
+        )
 
         hotspotManager = HotspotManager(appContext)
         bleMeshManager = BleMeshManager(appContext, onWebBleMessage = { text, sender -> handleGuestChat(text, "$sender \uD83D\uDD35") })
         bleMeshManager?.initAutoThrottle() // Phase 1: auto-throttle BLE when screen off / battery low
-        wifiSocketManager = WifiSocketManager(appContext, localNodeId)
+        wifiSocketManager = WifiSocketManager(appContext, localNodeId).apply {
+            onClientDisconnected = { disconnectedIp ->
+                handleWifiPeerDisconnected(disconnectedIp)
+            }
+        }
         
         initializeKeys()
         CallManager.init(appContext)
@@ -553,13 +901,16 @@ class MeshForegroundService : Service() {
                             // Phase 3: Initialize local cluster topology
                             WifiClusterBridgeManager.initializeLocalCluster(manager.localNodeId, newIp)
 
+                            val currentState = com.aetherweb.app.MeshNetworkManager.uiState.value
+                            val pwd = if (currentState.isPrivateRoom || !currentState.autoShareHotspotOverBle) "PRIVATE" else hotspotInfo.password
                             val hs = JSONObject()
                             hs.put("type", "sys_handshake")
                             hs.put("ssid", hotspotInfo.ssid)
-                            hs.put("pwd", hotspotInfo.password)
+                            hs.put("pwd", pwd)
                             hs.put("ip", newIp)
-                            hs.put("isPrivate", com.aetherweb.app.MeshNetworkManager.uiState.value.isPrivateRoom)
-                            com.aetherweb.app.MeshNetworkManager.meshRouter.routeLocalMessage(hs.toString())
+                            hs.put("isPrivate", currentState.isPrivateRoom)
+                            // Broadcast unencrypted so discovering devices without room keys can read it
+                            com.aetherweb.app.MeshNetworkManager.meshRouter.routeLocalMessage(hs.toString(), encrypt = false)
                         }
                         
                         com.aetherweb.app.MeshNetworkManager.webServerManager?.stopServer()
@@ -615,10 +966,73 @@ class MeshForegroundService : Service() {
                 kotlinx.coroutines.delay(20000L)
             }
         }
+
+        // Periodic Hotspot BLE Credentials Beacon (every 15s) while host is running with autoShareHotspotOverBle enabled
+        scope.launch {
+            while (isActive) {
+                try {
+                    val currentState = MeshNetworkManager.uiState.value
+                    if (currentState.isHotspotActive && 
+                        currentState.autoShareHotspotOverBle && 
+                        currentState.hotspotSsid.isNotEmpty()) {
+                        
+                        val ip = currentState.hotspotIp.ifEmpty { NetworkUtils.getLocalIpAddress() }
+                        val pwd = if (currentState.isPrivateRoom) "PRIVATE" else currentState.hotspotPassword
+                        
+                        val hs = JSONObject().apply {
+                            put("type", "sys_handshake")
+                            put("ssid", currentState.hotspotSsid)
+                            put("pwd", pwd)
+                            put("ip", ip)
+                            put("isPrivate", currentState.isPrivateRoom)
+                        }
+                        // Broadcast unencrypted so discovering devices without room keys can read it
+                        MeshNetworkManager.meshRouter.routeLocalMessage(hs.toString(), encrypt = false)
+                    }
+                } catch (e: Exception) {}
+                kotlinx.coroutines.delay(15000L)
+            }
+        }
+    }
+
+    private var lastRawBleSsid: String? = null
+    private var lastRawBlePwd: String? = null
+    private var lastRawBleIp: String? = null
+
+    private fun handleRawBleHandshakeChunk(chunk: String) {
+        if (chunk.startsWith("S:")) {
+            val raw = chunk.substring(2)
+            if (raw.startsWith("PRIVATE|")) {
+                lastRawBleSsid = raw.substring(8)
+                lastRawBlePwd = "PRIVATE"
+            } else {
+                lastRawBleSsid = raw
+            }
+        } else if (chunk.startsWith("P:")) {
+            lastRawBlePwd = chunk.substring(2)
+        } else if (chunk.startsWith("I:")) {
+            lastRawBleIp = chunk.substring(2)
+            val ssid = lastRawBleSsid
+            val pwd = lastRawBlePwd
+            val ip = lastRawBleIp ?: "192.168.49.1"
+            if (ssid != null && pwd != null) {
+                val hs = JSONObject().apply {
+                    put("type", "handshake")
+                    put("ssid", ssid)
+                    put("pwd", pwd)
+                    put("ip", ip)
+                }
+                processIncomingJson(hs.toString())
+            }
+        }
     }
 
     private fun processIncomingJson(json: String) {
         pulseWakeLock(8_000L) // Ensure CPU completes processing and routing before sleeping
+        if (json.startsWith("S:") || json.startsWith("P:") || json.startsWith("I:")) {
+            handleRawBleHandshakeChunk(json)
+            return
+        }
         if (json.startsWith("SYS_WIFI_PEER_JOINED:")) {
             val ip = json.removePrefix("SYS_WIFI_PEER_JOINED:")
             // We are the host, let's sync state to this new peer
@@ -649,6 +1063,29 @@ class MeshForegroundService : Service() {
                 
                 MeshNetworkManager.meshRouter.routeLocalMessage(syncObj.toString())
                 MeshNetworkManager.meshRouter.routeLocalMessage("{\"type\":\"sys_sync_request\"}")
+
+                // Step 3: Wi-Fi Multiplayer Active Game State Sync
+                // Sync any actively running game so newly connected Wi-Fi peers join with fresh state
+                if (currentState.sharedMediaType != "none") {
+                    when (currentState.sharedMediaType) {
+                        "tictactoe" -> {
+                            val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("tictactoe", currentState.ticTacToeState.toJson())
+                            MeshNetworkManager.meshRouter.routePacket(packet)
+                        }
+                        "connect4" -> {
+                            val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("connect4", currentState.connect4State.toJson())
+                            MeshNetworkManager.meshRouter.routePacket(packet)
+                        }
+                        "chess" -> {
+                            val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("chess", currentState.chessState.toJson().toString())
+                            MeshNetworkManager.meshRouter.routePacket(packet)
+                        }
+                        "ludo" -> {
+                            val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("ludo", currentState.ludoState.toJson().toString())
+                            MeshNetworkManager.meshRouter.routePacket(packet)
+                        }
+                    }
+                }
             }
             return
         } else if (json == "SYS_ROOM_CLOSED") {
@@ -722,6 +1159,84 @@ class MeshForegroundService : Service() {
             MeshNetworkManager.meshRouter.processIncomingPacket(msg)
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    private fun handleWifiPeerDisconnected(disconnectedIp: String) {
+        val currentState = MeshNetworkManager._uiState.value
+        if (!currentState.isHotspotActive) return
+
+        // 1. Tic-Tac-Toe disconnect fallback to bot
+        var tttChanged = false
+        var ttt = currentState.ticTacToeState
+        if (ttt.xPlayerId.contains(disconnectedIp) || (ttt.xPlayerId.isNotEmpty() && ttt.xPlayerId != MeshNetworkManager.localNodeId && ttt.xPlayerId != "bot" && !currentState.connectedNodes.any { it.id == ttt.xPlayerId })) {
+            ttt = ttt.copy(xPlayerId = "bot")
+            tttChanged = true
+        }
+        if (ttt.oPlayerId.contains(disconnectedIp) || (ttt.oPlayerId.isNotEmpty() && ttt.oPlayerId != MeshNetworkManager.localNodeId && ttt.oPlayerId != "bot" && !currentState.connectedNodes.any { it.id == ttt.oPlayerId })) {
+            ttt = ttt.copy(oPlayerId = "bot")
+            tttChanged = true
+        }
+        if (tttChanged) {
+            MeshNetworkManager._uiState.update { it.copy(ticTacToeState = ttt) }
+            val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("tictactoe", ttt.toJson())
+            MeshNetworkManager.meshRouter.routePacket(packet)
+            MeshNetworkManager.fanOutToGuests(packet.toJsonString(), "Host")
+        }
+
+        // 2. Connect 4 disconnect fallback to bot
+        var c4Changed = false
+        var c4 = currentState.connect4State
+        if (c4.redPlayerId.contains(disconnectedIp) || (c4.redPlayerId.isNotEmpty() && c4.redPlayerId != MeshNetworkManager.localNodeId && c4.redPlayerId != "bot" && !currentState.connectedNodes.any { it.id == c4.redPlayerId })) {
+            c4 = c4.copy(redPlayerId = "bot")
+            c4Changed = true
+        }
+        if (c4.yellowPlayerId.contains(disconnectedIp) || (c4.yellowPlayerId.isNotEmpty() && c4.yellowPlayerId != MeshNetworkManager.localNodeId && c4.yellowPlayerId != "bot" && !currentState.connectedNodes.any { it.id == c4.yellowPlayerId })) {
+            c4 = c4.copy(yellowPlayerId = "bot")
+            c4Changed = true
+        }
+        if (c4Changed) {
+            MeshNetworkManager._uiState.update { it.copy(connect4State = c4) }
+            val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("connect4", c4.toJson())
+            MeshNetworkManager.meshRouter.routePacket(packet)
+            MeshNetworkManager.fanOutToGuests(packet.toJsonString(), "Host")
+        }
+
+        // 3. Chess disconnect fallback to bot
+        var chessChanged = false
+        var chess = currentState.chessState
+        if (chess.whitePlayerId.contains(disconnectedIp) || (chess.whitePlayerId.isNotEmpty() && chess.whitePlayerId != MeshNetworkManager.localNodeId && chess.whitePlayerId != "bot" && !currentState.connectedNodes.any { it.id == chess.whitePlayerId })) {
+            chess = chess.copy(whitePlayerId = "bot")
+            chessChanged = true
+        }
+        if (chess.blackPlayerId.contains(disconnectedIp) || (chess.blackPlayerId.isNotEmpty() && chess.blackPlayerId != MeshNetworkManager.localNodeId && chess.blackPlayerId != "bot" && !currentState.connectedNodes.any { it.id == chess.blackPlayerId })) {
+            chess = chess.copy(blackPlayerId = "bot")
+            chessChanged = true
+        }
+        if (chessChanged) {
+            MeshNetworkManager._uiState.update { it.copy(chessState = chess) }
+            val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("chess", chess.toJson().toString())
+            MeshNetworkManager.meshRouter.routePacket(packet)
+            MeshNetworkManager.fanOutToGuests(packet.toJsonString(), "Host")
+        }
+
+        // 4. Ludo disconnect fallback to bot
+        var ludoChanged = false
+        var ludo = currentState.ludoState
+        val updatedIds = ludo.playerIds.toMutableMap()
+        for (i in 0..3) {
+            val pid = updatedIds[i] ?: ""
+            if (pid.contains(disconnectedIp) || (pid.isNotEmpty() && pid != MeshNetworkManager.localNodeId && pid != "bot" && !currentState.connectedNodes.any { it.id == pid })) {
+                updatedIds[i] = "bot"
+                ludoChanged = true
+            }
+        }
+        if (ludoChanged) {
+            ludo = ludo.copy(playerIds = updatedIds)
+            MeshNetworkManager._uiState.update { it.copy(ludoState = ludo) }
+            val packet = com.aetherweb.app.protocol.MeshPacket.MiniGameSync("ludo", ludo.toJson().toString())
+            MeshNetworkManager.meshRouter.routePacket(packet)
+            MeshNetworkManager.fanOutToGuests(packet.toJsonString(), "Host")
         }
     }
 

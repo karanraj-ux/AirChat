@@ -227,6 +227,17 @@ object MeshPacketCodec {
                     )
                 }
 
+                MeshPacket.TYPE_PIN_HOTSPOT -> {
+                    MeshPacket.PinHotspot(
+                        ssid = json.optString("ssid", ""),
+                        pwd = json.optString("pwd", ""),
+                        ip = json.optString("ip", ""),
+                        hostName = json.optString("hostName", "Host"),
+                        isPinned = json.optBoolean("isPinned", true),
+                        timestamp = json.optLong("timestamp", System.currentTimeMillis())
+                    )
+                }
+
                 MeshPacket.TYPE_SYS_IDENTITY -> {
                     MeshPacket.SysIdentity(
                         id = json.optString("id", ""),

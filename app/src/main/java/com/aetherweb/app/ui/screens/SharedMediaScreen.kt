@@ -330,6 +330,18 @@ fun SharedMediaScreen(
                         onStateChange = { newState -> vm.broadcastChessState(newState) },
                         modifier = Modifier.fillMaxSize()
                     )
+                } else if (mediaType == "ide") {
+                    com.aetherweb.app.ui.screens.NativeIdeScreen(
+                        uiState = uiState,
+                        viewModel = viewModel,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else if (mediaType == "truthdare") {
+                    com.aetherweb.app.ui.screens.TruthDareScreen(
+                        uiState = uiState,
+                        viewModel = viewModel,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 } else if (mediaType == "canvas") {
                     val vm: com.aetherweb.app.MeshViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
                     val state by vm.uiState.collectAsState()
@@ -347,14 +359,14 @@ fun SharedMediaScreen(
                     )
                 }
 
-                // Phase 1 Optimization: Floating In-Game PIP Chat Drawer (Active for all multiplayer games)
-                if (mediaType in listOf("tictactoe", "connect4", "ludo", "chess", "web")) {
+                // Phase 1 Optimization: Floating In-Game PIP Chat Drawer (Non-blocking upper overlay)
+                if (mediaType in listOf("tictactoe", "connect4", "ludo", "chess", "truthdare", "ide", "web")) {
                     val vm: com.aetherweb.app.MeshViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
                     val state by vm.uiState.collectAsState()
                     GamePipChatOverlay(
                         messages = state.messages,
                         onSendMessage = { text -> vm.sendMessage(text) },
-                        modifier = Modifier.align(Alignment.BottomEnd)
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
             }

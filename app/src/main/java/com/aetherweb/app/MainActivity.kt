@@ -140,7 +140,7 @@ class MainActivity : ComponentActivity() {
                     title = { Text("A quick heads-up ✋") },
                     text = {
                         Text(
-                            "AetherWeb talks phone-to-phone with no internet, so it needs its radios:\n\n" +
+                            "AirChat talks phone-to-phone with no internet, so it needs its radios:\n\n" +
                             "• Bluetooth — finds nearby phones and relays chat through the mesh\n" +
                             "• Wi-Fi — carries voice/video calls, music sync and file beams\n" +
                             "• Notifications — lets you know when messages arrive\n\n" +

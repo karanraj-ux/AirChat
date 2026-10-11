@@ -596,6 +596,8 @@ fun ChatInput(
     onFilePick: () -> Unit,
     onCameraClick: () -> Unit = {},
     onPollClick: () -> Unit = {},
+    onIdeClick: (() -> Unit)? = null,
+    onTruthDareClick: (() -> Unit)? = null,
     onMicClick: () -> Unit,
     onCancelRecording: () -> Unit = onMicClick,
     isRecording: Boolean = false,
@@ -751,6 +753,20 @@ fun ChatInput(
                                 leadingIcon = { Icon(Icons.Default.BarChart, contentDescription = null) },
                                 onClick = { showAttachMenu = false; onPollClick() }
                             )
+                            if (onIdeClick != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Code IDE") },
+                                    leadingIcon = { Icon(Icons.Default.Code, contentDescription = null) },
+                                    onClick = { showAttachMenu = false; onIdeClick() }
+                                )
+                            }
+                            if (onTruthDareClick != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Truth / Dare") },
+                                    leadingIcon = { Icon(Icons.Default.SportsEsports, contentDescription = null) },
+                                    onClick = { showAttachMenu = false; onTruthDareClick() }
+                                )
+                            }
                         }
                     }
 
