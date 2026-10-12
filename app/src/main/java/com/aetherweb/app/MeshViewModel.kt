@@ -150,7 +150,8 @@ data class MeshState(
     val lastStorageSweepSummary: String? = null,
     val isDataSaverEnabled: Boolean = false, // Network Throttling & Compression for 2G / Satellite
     val bleDutyCycleLabel: String = "Balanced Adaptive (25% Duty)",
-    val pinnedMessageId: String? = null // WhatsApp-style pinned message
+    val pinnedMessageId: String? = null, // WhatsApp-style pinned message
+    val isAppSleeping: Boolean = false // Master sleep: no radios, no background work when true
 )
 
 class MeshViewModel(application: Application) : AndroidViewModel(application) {
@@ -180,6 +181,13 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
         )
 
     init {
+        // Sync persisted sleep state into UI on startup
+        val wasSleeping = getApplication<android.app.Application>()
+            .getSharedPreferences("aetherweb_prefs", android.content.Context.MODE_PRIVATE)
+            .getBoolean("app_sleeping", false)
+        if (wasSleeping) {
+            MeshNetworkManager._uiState.update { it.copy(isAppSleeping = true) }
+        }
         // Phase 3: watch for the mesh coming back after an outage — flush queued
         // PENDING messages so nothing typed while "walking away" is ever lost.
         viewModelScope.launch {
@@ -1177,6 +1185,73 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
             val nextPinned = if (current.pinnedMessageId == messageId) null else messageId
             current.copy(pinnedMessageId = nextPinned)
         }
+    }
+
+    // Master sleep toggle: when sleeping, all radios stop, web server stops,
+    // foreground service stops — zero background battery drain.
+    fun toggleAppSleep() {
+        val sleeping = !MeshNetworkManager._uiState.value.isAppSleeping
+        // Persist so sleep survives app restart
+        getApplication<android.app.Application>()
+            .getSharedPreferences("aetherweb_prefs", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("app_sleeping", sleeping).apply()
+        MeshNetworkManager._uiState.update { it.copy(isAppSleeping = sleeping) }
+        if (sleeping) {
+            putAppToSleep()
+        } else {
+            wakeAppUp()
+        }
+    }
+
+    fun isAppSleepingPersisted(): Boolean {
+        return getApplication<android.app.Application>()
+            .getSharedPreferences("aetherweb_prefs", android.content.Context.MODE_PRIVATE)
+            .getBoolean("app_sleeping", false)
+    }
+
+    private fun putAppToSleep() {
+        try {
+            // Stop BLE: scanning + advertising + GATT server
+            MeshNetworkManager.bleMeshManager?.stopScanning()
+            MeshNetworkManager.bleMeshManager?.stopAdvertising()
+            // Stop web server (no guests while sleeping)
+            MeshNetworkManager.webServerManager?.stopServer()
+            // Stop WiFi: release locks, stop discovery
+            MeshNetworkManager.wifiSocketManager?.let {
+                try { it.stop() } catch (_: Exception) {}
+            }
+            // Stop presence announcements
+            com.aetherweb.app.PresenceManager.stopAnnouncer()
+        } catch (_: Exception) {}
+        // Stop the foreground service — no background work at all
+        try {
+            getApplication<android.app.Application>().stopService(
+                android.content.Intent(getApplication(), MeshForegroundService::class.java)
+            )
+        } catch (_: Exception) {}
+        android.util.Log.i("MeshViewModel", "App sleeping: all radios off, service stopped")
+    }
+
+    private fun wakeAppUp() {
+        // Restart the foreground service — it re-initializes BLE, presence, etc.
+        try {
+            val intent = android.content.Intent(getApplication(), MeshForegroundService::class.java)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                getApplication<android.app.Application>().startForegroundService(intent)
+            } else {
+                getApplication<android.app.Application>().startService(intent)
+            }
+        } catch (_: Exception) {}
+        android.util.Log.i("MeshViewModel", "App awake: mesh service restarting")
+    }
+
+    // Start web server on-demand when user wants to share (QR, file, portal).
+    // Power saving: server no longer auto-starts with the service.
+    fun startWebServerForSharing() {
+        try {
+            MeshNetworkManager.webServerManager?.startServer()
+            MeshNetworkManager._uiState.update { it.copy(isWebServerRunning = true) }
+        } catch (_: Exception) {}
     }
 
     fun setLiteMode(enabled: Boolean) {

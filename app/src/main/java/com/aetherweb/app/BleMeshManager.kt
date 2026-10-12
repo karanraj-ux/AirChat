@@ -210,7 +210,7 @@ class BleMeshManager(
                                 val settings = android.bluetooth.le.AdvertiseSettings.Builder()
                                     .setAdvertiseMode(advMode)
                                     .setConnectable(true)
-                                    .setTimeout(0)
+                                    .setTimeout(3000) // Duty-cycled: auto-stop after 3s to save battery
                                     .setTxPowerLevel(txPower)
                                     .build()
                                 try {
@@ -269,7 +269,7 @@ class BleMeshManager(
                             val settings = AdvertiseSettings.Builder()
                                 .setAdvertiseMode(advMode)
                                 .setConnectable(true)
-                                .setTimeout(0)
+                                .setTimeout(3000) // Duty-cycled: auto-stop after 3s to save battery
                                 .setTxPowerLevel(txPower)
                                 .build()
 
@@ -294,7 +294,7 @@ class BleMeshManager(
                         val settings = AdvertiseSettings.Builder()
                             .setAdvertiseMode(advMode)
                             .setConnectable(true)
-                            .setTimeout(0)
+                            .setTimeout(3000) // Duty-cycled: auto-stop after 3s to save battery
                             .setTxPowerLevel(txPower)
                             .build()
 
@@ -981,7 +981,7 @@ class BleMeshManager(
             val settings = AdvertiseSettings.Builder()
                 .setAdvertiseMode(advMode)
                 .setConnectable(true)
-                .setTimeout(0)
+                .setTimeout(3000) // Duty-cycled: auto-stop after 3s to save battery
                 .setTxPowerLevel(txPower)
                 .build()
             try {

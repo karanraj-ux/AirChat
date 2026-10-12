@@ -166,7 +166,10 @@ class MainActivity : ComponentActivity() {
                 // Removed blocking UI completely.
                 
                 LaunchedEffect(Unit) {
-                    if (true) {
+                    // Respect persisted sleep state: don't auto-start mesh if user put app to sleep
+                    val wasSleeping = getSharedPreferences("aetherweb_prefs", android.content.Context.MODE_PRIVATE)
+                        .getBoolean("app_sleeping", false)
+                    if (!wasSleeping) {
                         val serviceIntent = Intent(this@MainActivity, MeshForegroundService::class.java)
                         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                             startForegroundService(serviceIntent)

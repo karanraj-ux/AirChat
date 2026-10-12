@@ -927,9 +927,9 @@ class MeshForegroundService : Service() {
                         ) }
                     }
                 } else {
-                    // Ensure it is running even without hotspot
-                    com.aetherweb.app.MeshNetworkManager.webServerManager?.startServer(8080)
-                    com.aetherweb.app.MeshNetworkManager._uiState.update { it.copy(isWebServerRunning = true) }
+                    // Power saving: web server starts on-demand only (QR share, file share),
+                    // not automatically. See MeshViewModel.startWebServerForSharing().
+                    com.aetherweb.app.MeshNetworkManager._uiState.update { it.copy(isWebServerRunning = false) }
                 }
             }
         }

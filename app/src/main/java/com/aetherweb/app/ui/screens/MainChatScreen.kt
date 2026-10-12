@@ -573,6 +573,40 @@ fun MainChatScreen(
         containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
         Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
+            // Master sleep toggle — below top nav. One tap: all radios off, zero background drain.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        if (uiState.isAppSleeping) Color(0xFF1A237E)
+                        else Color(0xFF1B2A1B)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (uiState.isAppSleeping) "💤" else "🔥",
+                        fontSize = 16.sp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (uiState.isAppSleeping) "Sleeping — tap to wake up"
+                               else "Awake — mesh running",
+                        color = Color(0xFFE9EDEF),
+                        fontSize = 13.sp
+                    )
+                }
+                androidx.compose.material3.Switch(
+                    checked = !uiState.isAppSleeping,
+                    onCheckedChange = { viewModel.toggleAppSleep() },
+                    colors = androidx.compose.material3.SwitchDefaults.colors(
+                        checkedThumbColor = Color(0xFF00E676),
+                        uncheckedThumbColor = Color(0xFF9FA8DA)
+                    )
+                )
+            }
             if (isGameActive && !isGameMinimized) {
                 BackHandler {
                     viewModel.setSharedMediaMinimized(true)
@@ -1331,7 +1365,11 @@ fun MainChatScreen(
 
                         // INSTANT QR CODE IDENTITY SHARING BUTTON
                         OutlinedButton(
-                            onClick = { showMyQrDialog = true },
+                            onClick = {
+                                showMyQrDialog = true
+                                // Power saving: web server starts on-demand when user shares QR
+                                viewModel.startWebServerForSharing()
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF00E5FF)),
                             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF))
