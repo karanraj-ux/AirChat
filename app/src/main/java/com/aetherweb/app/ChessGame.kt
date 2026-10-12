@@ -255,7 +255,12 @@ object ChessEngine {
     }
 
     private fun pieceValue(piece: String): Int = when (piece.lowercase()) {
-        "p" -> 100, "n" -> 320, "b" -> 330, "r" -> 500, "q" -> 900, "k" -> 20000
+        "p" -> 100
+        "n" -> 320
+        "b" -> 330
+        "r" -> 500
+        "q" -> 900
+        "k" -> 20000
         else -> 0
     }
 
