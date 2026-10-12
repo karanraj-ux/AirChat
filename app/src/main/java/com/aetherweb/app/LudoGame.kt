@@ -235,11 +235,46 @@ object LudoEngine {
             // 7. General progress bonus (advance furthest pieces)
             score += nextPos
 
+            // 8. HUMAN-LIKE: avoid leaving a safe spot for a dangerous square
+            if (curAbs != null && curAbs in safeSpots && nextAbs != null && nextAbs !in safeSpots) {
+                // Check if any enemy can reach nextAbs
+                var danger = false
+                for (other in 0..3) {
+                    if (other == player) continue
+                    val otherPieces = state.pieces[other] ?: continue
+                    for (op in otherPieces) {
+                        val otherAbs = getAbsoluteBoardPos(other, op)
+                        if (otherAbs != null) {
+                            val dist = (nextAbs - otherAbs + 52) % 52
+                            if (dist in 1..6) { danger = true; break }
+                        }
+                    }
+                    if (danger) break
+                }
+                if (danger) score -= 60 // Don't walk into a trap
+            }
+
+            // 9. HUMAN-LIKE: don't stack pieces on the same square (spread out)
+            val ownOnTarget = pieces.count { getAbsoluteBoardPos(player, it) == nextAbs && it != pos }
+            if (ownOnTarget > 0) score -= 15 * ownOnTarget
+
+            // 10. HUMAN-LIKE: prefer bringing a new piece out when behind
+            // (humans develop more pieces instead of racing one)
+            val piecesOut = pieces.count { it > 0 }
+            if (pos == 0 && roll == 6 && piecesOut < 2) score += 25
+
             ScoredMove(idx, score)
         }
 
-        // Return best scoring index with tie-breaker
-        return scoredMoves.maxByOrNull { it.score }?.index ?: validIndices.random()
+        // Human-like pick: best move usually, but 10% chance of a "casual" pick
+        // from the top 2 (feels like a person, not a calculator)
+        val sorted = scoredMoves.sortedByDescending { it.score }
+        val pick = if (sorted.size > 1 && Math.random() < 0.10) {
+            sorted[kotlin.random.Random.nextInt(minOf(2, sorted.size))]
+        } else {
+            sorted.first()
+        }
+        return pick.index
     }
 
     /**

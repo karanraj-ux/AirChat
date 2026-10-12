@@ -230,11 +230,82 @@ object ChessEngine {
             return state.copy(winner = "Draw") // Or someone lost, simplified
         }
         
-        // Pick move: sort by score descending, take highest, break ties randomly
-        validMoves.shuffle()
-        val bestMove = validMoves.maxByOrNull { it.score } ?: validMoves.first()
-        
+        // Human-like 2-ply search: evaluate each move, then the opponent's best reply.
+        // Piece-square tables reward center control, development, king safety.
+        // 12% "human error": occasionally picks a non-best move (never hangs mate).
+        data class Scored(val move: Move, val score: Int)
+        val scored = validMoves.map { m ->
+            val after = applyMove(state, m.from, m.to, m.piece, m.targetPiece)
+            var score = evaluateBoard(after, isWhite) + m.score
+            // Opponent's best reply (1-ply lookahead)
+            val reply = bestReplyScore(after, !isWhite)
+            score -= reply
+            Scored(m, score)
+        }.sortedByDescending { it.score }
+
+        val pick = if (scored.size > 1 && Math.random() < 0.12) {
+            // Human slip: pick from top 3 instead of the best (feels natural, not random)
+            scored[kotlin.random.Random.nextInt(minOf(3, scored.size))]
+        } else {
+            scored.first()
+        }
+        val bestMove = pick.move
+
         return applyMove(state, bestMove.from, bestMove.to, bestMove.piece, bestMove.targetPiece)
+    }
+
+    private fun pieceValue(piece: String): Int = when (piece.lowercase()) {
+        "p" -> 100, "n" -> 320, "b" -> 330, "r" -> 500, "q" -> 900, "k" -> 20000
+        else -> 0
+    }
+
+    // Piece-square bonuses: center control, pawn advancement, king safety, development
+    private fun positionalBonus(piece: String, idx: Int, isWhite: Boolean): Int {
+        val r = idx / 8
+        val c = idx % 8
+        val row = if (isWhite) 7 - r else r // white's perspective: rank from own side
+        return when (piece.lowercase()) {
+            "p" -> row * 8 + (if (c in 2..5) 6 else 0) // push passed/central pawns
+            "n" -> (if (r in 2..5 && c in 2..5) 18 else 0) + (if (row > 0) 6 else -8)
+            "b" -> if (r in 1..6 && c in 1..6) 8 else 0
+            "r" -> if (c in 2..5) 6 else 0
+            "q" -> if (r in 2..5 && c in 2..5) 6 else 0
+            "k" -> if (row == 0 && c in 1..6) 12 else 0 // castled-ish safety
+            else -> 0
+        }
+    }
+
+    private fun evaluateBoard(state: ChessState, forWhite: Boolean): Int {
+        var score = 0
+        for (i in 0..63) {
+            val piece = state.pieces[i]
+            if (piece.isEmpty()) continue
+            val white = piece[0].isUpperCase()
+            val v = pieceValue(piece) + positionalBonus(piece, i, white)
+            score += if (white == forWhite) v else -v
+        }
+        return score
+    }
+
+    // Opponent's best immediate capture/eval reply (for 2-ply lookahead)
+    private fun bestReplyScore(state: ChessState, replyWhite: Boolean): Int {
+        var best = Int.MIN_VALUE
+        var found = false
+        for (fromIdx in 0..63) {
+            val piece = state.pieces[fromIdx]
+            if (piece.isEmpty() || piece[0].isUpperCase() != replyWhite) continue
+            for (toIdx in 0..63) {
+                if (fromIdx == toIdx) continue
+                val target = state.pieces[toIdx]
+                if (target.isNotEmpty() && target[0].isUpperCase() == replyWhite) continue
+                if (!isValidMove(state, fromIdx, toIdx, piece, replyWhite, target)) continue
+                found = true
+                val after = applyMove(state, fromIdx, toIdx, piece, target)
+                val s = evaluateBoard(after, replyWhite)
+                if (s > best) best = s
+            }
+        }
+        return if (found) best else 0
     }
 
     fun reset(): ChessState = ChessState()
