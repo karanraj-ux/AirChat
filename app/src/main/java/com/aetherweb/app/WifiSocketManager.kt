@@ -374,15 +374,17 @@ class WifiSocketManager(
                             activeWifiNodes.value = peerNames.toMap()
                             
                             val aesKey = MeshNetworkManager.roomAesKey
-                            if (aesKey != null && MeshNetworkManager.uiState.value.isHotspotActive) {
-                                // Host puts peer in Waiting Room
-                                val pendingUser = com.aetherweb.app.PendingUser(java.util.UUID.randomUUID().toString(), peerName, peerPubKeyBase64, ip)
-                                MeshNetworkManager._uiState.update { it.copy(pendingUsers = it.pendingUsers + pendingUser) }
-                                out.println("SYS_WAITING_FOR_APPROVAL")
-                            } else {
-                                // If not Host, just acknowledge.
-                                _incomingPackets.tryEmit("SYS_WIFI_PEER_JOINED:$ip")
+                            if (aesKey != null) {
+                                try {
+                                    val peerPubKey = CryptoManager.getPublicKeyFromString(peerPubKeyBase64)
+                                    val exportedAes = CryptoManager.exportAESKey(aesKey)
+                                    val encryptedAes = CryptoManager.encryptRSA(exportedAes.toByteArray(), peerPubKey)
+                                    out.println("SYS_WIFI_AES_KEY:$encryptedAes")
+                                } catch (e: Exception) {
+                                    Log.e("WifiSocketManager", "Failed to encrypt AES key for peer $ip", e)
+                                }
                             }
+                            _incomingPackets.tryEmit("SYS_WIFI_PEER_JOINED:$ip")
                         }
                     } else if (line.startsWith("SYS_WIFI_AES_KEY:")) {
                         val encryptedAes = line.removePrefix("SYS_WIFI_AES_KEY:")

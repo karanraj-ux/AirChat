@@ -1,8 +1,10 @@
 package com.aetherweb.app.ui.components
 
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -75,6 +77,7 @@ fun WhatsAppDatePill(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatBubble(
     message: ChatMessage,
@@ -83,6 +86,8 @@ fun ChatBubble(
     onSaveFile: ((String) -> Unit)? = null,
     onSaveImage: ((String) -> Unit)? = null,
     isMentioned: Boolean = false,
+    isPinned: Boolean = false,
+    onPinMessage: (() -> Unit)? = null,
     knownUserIds: Map<String, String> = emptyMap(),
     isFirstInThread: Boolean = true,
     isLastInThread: Boolean = true
@@ -169,15 +174,43 @@ fun ChatBubble(
             ),
         horizontalAlignment = align
     ) {
-        Surface(
-            color = bubbleColor,
-            shape = bubbleShape,
-            shadowElevation = 1.dp,
-            modifier = Modifier.widthIn(min = 72.dp, max = 340.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp)
+        var showDropdownMenu by remember { mutableStateOf(false) }
+
+        Box {
+            Surface(
+                color = bubbleColor,
+                shape = bubbleShape,
+                shadowElevation = 1.dp,
+                modifier = Modifier
+                    .widthIn(min = 72.dp, max = 340.dp)
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { showDropdownMenu = true }
+                    )
             ) {
+                Column(
+                    modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp)
+                ) {
+                    if (isPinned) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(bottom = 2.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.PushPin,
+                                contentDescription = "Pinned",
+                                tint = WhatsAppGreen,
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                "Pinned Message",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = WhatsAppGreen
+                            )
+                        }
+                    }
                 // Sender Header for Incoming group chats: only shown on first message in sender thread
                 if (!isFromMe && isFirstInThread) {
                     Row(
@@ -242,128 +275,8 @@ fun ChatBubble(
                     message.message
                 }
 
-                // Main Message Content / Game Challenge Cards
-                val isGameInvite = textWithoutUrl.startsWith("🎮 [GAME CHALLENGE]:")
-                if (isGameInvite) {
-                    val gameType = when {
-                        textWithoutUrl.contains("Connect 4", ignoreCase = true) -> "connect4"
-                        textWithoutUrl.contains("Tic-Tac-Toe", ignoreCase = true) -> "tictactoe"
-                        textWithoutUrl.contains("Chess", ignoreCase = true) -> "chess"
-                        else -> "tictactoe"
-                    }
-                    val gameTitle = when (gameType) {
-                        "connect4" -> "Connect 4 Match"
-                        "chess" -> "Chess Showdown"
-                        else -> "Tic-Tac-Toe Duel"
-                    }
-                    val gameIcon = when (gameType) {
-                        "connect4" -> "🔴"
-                        "chess" -> "♟️"
-                        else -> "❌"
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFF1F2C34),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(gameIcon, fontSize = 24.sp)
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text(
-                                        gameTitle,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White,
-                                        fontSize = 15.sp
-                                    )
-                                    Text(
-                                        "Mesh Peer-to-Peer Match",
-                                        color = WhatsAppSubtleText,
-                                        fontSize = 11.sp
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Button(
-                                onClick = { onOpenUrl("meshgame://$gameType") },
-                                colors = ButtonDefaults.buttonColors(containerColor = WhatsAppGreen),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    if (isFromMe) "Resume / Watch Game" else "Accept Challenge & Play",
-                                    color = Color.Black,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 13.sp
-                                )
-                            }
-                        }
-                    }
-                } else if (textWithoutUrl.startsWith("💬 [Reel Reply") || textWithoutUrl.startsWith("📱 [Shared Reel]")) {
-                    val isShare = textWithoutUrl.startsWith("📱 [Shared Reel]")
-                    val headerText = if (isShare) "Offline Reel Shared" else "Reel Comment Reply"
-                    
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color(0xFF131D24),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .clickable { onOpenUrl("meshfeed://open") }
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(IntrinsicSize.Min)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .width(4.dp)
-                                    .fillMaxHeight()
-                                    .background(
-                                        Brush.verticalGradient(
-                                            listOf(Color(0xFFE1306C), Color(0xFFFD1D1D), Color(0xFFF77737))
-                                        )
-                                    )
-                            )
-                            Column(modifier = Modifier.padding(8.dp).weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.VideoLibrary,
-                                        contentDescription = null,
-                                        tint = Color(0xFFE1306C),
-                                        modifier = Modifier.size(13.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(5.dp))
-                                    Text(
-                                        text = headerText,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFFE1306C)
-                                    )
-                                    Spacer(modifier = Modifier.weight(1f))
-                                    Text(
-                                        text = "View ▶",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF4FC3F7)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(3.dp))
-                                Text(
-                                    text = textWithoutUrl,
-                                    color = Color(0xFFE9EDEF),
-                                    fontSize = 13.sp,
-                                    lineHeight = 17.sp
-                                )
-                            }
-                        }
-                    }
-                } else if (textWithoutUrl.isNotEmpty()) {
+                // Main Message Content
+                if (textWithoutUrl.isNotEmpty()) {
                     SelectionContainer {
                         Text(
                             text = textWithoutUrl,
@@ -387,6 +300,12 @@ fun ChatBubble(
                     if (isImage) {
                         // Direct local file resolution: prioritize local disk file to eliminate blank boxes
                         val imageModel: Any = localFile ?: url
+                        val imageRequest = remember(imageModel, context) {
+                            coil.request.ImageRequest.Builder(context)
+                                .data(imageModel)
+                                .crossfade(true)
+                                .build()
+                        }
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -394,7 +313,7 @@ fun ChatBubble(
                                 .background(Color(0xFF101920))
                         ) {
                             AsyncImage(
-                                model = imageModel,
+                                model = imageRequest,
                                 contentDescription = "Shared Image",
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -584,8 +503,47 @@ fun ChatBubble(
                     }
                 }
             }
+
+            DropdownMenu(
+                expanded = showDropdownMenu,
+                onDismissRequest = { showDropdownMenu = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text(if (isPinned) "Unpin Message" else "📌 Pin Message") },
+                    onClick = {
+                        showDropdownMenu = false
+                        onPinMessage?.invoke()
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.PushPin,
+                            contentDescription = "Pin",
+                            tint = WhatsAppGreen,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                )
+                val context = androidx.compose.ui.platform.LocalContext.current
+                DropdownMenuItem(
+                    text = { Text("Copy Text") },
+                    onClick = {
+                        showDropdownMenu = false
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                        val clip = android.content.ClipData.newPlainText("chat_msg", message.message)
+                        clipboard?.setPrimaryClip(clip)
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.ContentCopy,
+                            contentDescription = "Copy",
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                )
+            }
         }
     }
+}
 }
 
 @Composable
@@ -597,7 +555,6 @@ fun ChatInput(
     onCameraClick: () -> Unit = {},
     onPollClick: () -> Unit = {},
     onIdeClick: (() -> Unit)? = null,
-    onTruthDareClick: (() -> Unit)? = null,
     onMicClick: () -> Unit,
     onCancelRecording: () -> Unit = onMicClick,
     isRecording: Boolean = false,
@@ -758,13 +715,6 @@ fun ChatInput(
                                     text = { Text("Code IDE") },
                                     leadingIcon = { Icon(Icons.Default.Code, contentDescription = null) },
                                     onClick = { showAttachMenu = false; onIdeClick() }
-                                )
-                            }
-                            if (onTruthDareClick != null) {
-                                DropdownMenuItem(
-                                    text = { Text("Truth / Dare") },
-                                    leadingIcon = { Icon(Icons.Default.SportsEsports, contentDescription = null) },
-                                    onClick = { showAttachMenu = false; onTruthDareClick() }
                                 )
                             }
                         }

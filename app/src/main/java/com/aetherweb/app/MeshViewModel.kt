@@ -1137,7 +1137,6 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
         if (type != "none") {
             // Game started cleanly without injecting chat feed spam
         } else {
-            // Game closed cleanly without chat spam
             // Reset game states
             MeshNetworkManager._uiState.update { it.copy(chessState = com.aetherweb.app.ChessEngine.reset(), ludoState = com.aetherweb.app.LudoState(), ticTacToeState = com.aetherweb.app.TicTacToeState(), connect4State = com.aetherweb.app.Connect4State()) }
             // Broadcast reset so others also clear
@@ -1178,13 +1177,6 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSharedMediaMinimized(minimized: Boolean) {
         MeshNetworkManager._uiState.update { it.copy(isSharedMediaMinimized = minimized) }
-    }
-
-    fun togglePinMessage(messageId: String) {
-        MeshNetworkManager._uiState.update { current ->
-            val nextPinned = if (current.pinnedMessageId == messageId) null else messageId
-            current.copy(pinnedMessageId = nextPinned)
-        }
     }
 
     // Master sleep toggle: when sleeping, all radios stop, web server stops,
@@ -1533,6 +1525,13 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 current.copy(messages = updatedMessages)
             }
+        }
+    }
+
+    fun togglePinMessage(messageId: String) {
+        MeshNetworkManager._uiState.update { current ->
+            val nextPinned = if (current.pinnedMessageId == messageId) null else messageId
+            current.copy(pinnedMessageId = nextPinned)
         }
     }
 

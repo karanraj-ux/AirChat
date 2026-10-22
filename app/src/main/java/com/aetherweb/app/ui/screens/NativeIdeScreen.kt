@@ -94,6 +94,7 @@ print("--- Execution Complete ---")
     var activeTab by remember { mutableIntStateOf(0) } // 0: Editor, 1: Live Output, 2: Console Log
     var consoleLogs by remember { mutableStateOf(listOf<String>()) }
     var outputRenderKey by remember { mutableIntStateOf(0) }
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
     val currentCode = when (currentLang) {
         "HTML" -> codeHtml
@@ -110,59 +111,71 @@ print("--- Execution Complete ---")
         }
     }
 
+    fun appendLog(msg: String) {
+        consoleLogs = consoleLogs + msg
+    }
+
     fun runCode() {
         if (currentLang == "HTML") {
             outputRenderKey++
             activeTab = 1
+            appendLog("🌐 HTML page rendered in WebView engine.")
         } else if (currentLang == "JavaScript") {
-            // Run JS in simulated console
-            val logs = mutableListOf<String>()
-            logs.add("▶ Running JavaScript...")
-            try {
-                // Execute in lightweight JavaScript evaluator or log output
-                val jsEngineLines = currentCode.lines()
-                var evaluatedCount = 0
-                jsEngineLines.forEach { line ->
-                    val trimmed = line.trim()
-                    if (trimmed.startsWith("console.log(") && trimmed.endsWith(");")) {
-                        val content = trimmed.removePrefix("console.log(").removeSuffix(");").trim()
-                        val stripped = content.removeSurrounding("\"").removeSurrounding("'")
-                        logs.add("📝 [LOG]: $stripped")
-                        evaluatedCount++
-                    }
-                }
-                if (evaluatedCount == 0) {
-                    logs.add("✓ Script syntax valid ($ {currentCode.length} chars)")
-                    logs.add("💡 Hint: Add console.log('...') to see direct outputs here")
-                }
-                logs.add("✓ Execution finished successfully")
-            } catch (e: Exception) {
-                logs.add("❌ Error: ${e.message}")
-            }
-            consoleLogs = logs
+            appendLog("▶ Executing JavaScript in Web Engine...")
             activeTab = 2
+            val wrappedHtml = """
+                <!DOCTYPE html>
+                <html>
+                <head>
+                <script>
+                  (function() {
+                    var oldLog = console.log;
+                    var oldErr = console.error;
+                    var oldWarn = console.warn;
+                    console.log = function() {
+                      var args = Array.prototype.slice.call(arguments).join(' ');
+                      oldLog.apply(console, arguments);
+                    };
+                  })();
+                </script>
+                </head>
+                <body>
+                <script>
+                  try {
+                    $codeJs
+                  } catch(e) {
+                    console.error("Uncaught " + e.toString());
+                  }
+                </script>
+                </body>
+                </html>
+            """.trimIndent()
+            webViewRef?.loadDataWithBaseURL("http://127.0.0.1:8080/", wrappedHtml, "text/html", "UTF-8", null)
         } else {
-            // Python execution
+            // Python execution sandbox
+            appendLog("🐍 Running Python script...")
+            activeTab = 2
             val logs = mutableListOf<String>()
-            logs.add("▶ Running Python Script...")
             val lines = currentCode.lines()
-            var printed = 0
+            var executed = 0
             lines.forEach { line ->
                 val trimmed = line.trim()
                 if (trimmed.startsWith("print(") && trimmed.endsWith(")")) {
-                    val p = trimmed.removePrefix("print(").removeSuffix(")").trim()
-                    val stripped = p.removeSurrounding("\"").removeSurrounding("'")
-                    logs.add("🐍 [OUT]: $stripped")
-                    printed++
+                    val content = trimmed.removePrefix("print(").removeSuffix(")").trim()
+                    val unquoted = content.removeSurrounding("\"").removeSurrounding("'")
+                    logs.add("🐍 [OUT]: $unquoted")
+                    executed++
+                } else if (trimmed.startsWith("print(")) {
+                    val content = trimmed.removePrefix("print(").trim()
+                    logs.add("🐍 [OUT]: $content")
+                    executed++
                 }
             }
-            if (printed == 0) {
-                logs.add("✓ Python script compiled (${currentCode.length} bytes)")
-                logs.add("💡 Hint: Use print('...') for visual output in Console")
+            if (executed == 0) {
+                logs.add("✓ Script checked. Tip: Add print('...') to view outputs in Console.")
             }
             logs.add("✓ Process finished with exit code 0")
-            consoleLogs = logs
-            activeTab = 2
+            consoleLogs = consoleLogs + logs
         }
     }
 
@@ -171,45 +184,69 @@ print("--- Execution Complete ---")
             .fillMaxSize()
             .background(Color(0xFF0F172A))
     ) {
-        // Top Toolbar
+        // De-cramped Top Toolbar
         Surface(
             color = Color(0xFF1E293B),
             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
         ) {
-            Column(modifier = Modifier.padding(8.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Row 1: App Badge + Language Chips
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF38BDF8).copy(alpha = 0.15f),
-                            modifier = Modifier.padding(end = 8.dp)
-                        ) {
-                            Text(
-                                "💻 Native IDE",
-                                color = Color(0xFF38BDF8),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF38BDF8).copy(alpha = 0.15f)
+                    ) {
+                        Text(
+                            "💻 Code IDE",
+                            color = Color(0xFF38BDF8),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
 
-                        // Language Pills
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         listOf("HTML", "JavaScript", "Python").forEach { lang ->
                             FilterChip(
                                 selected = currentLang == lang,
                                 onClick = { currentLang = lang },
-                                label = { Text(lang, fontSize = 11.sp) },
-                                modifier = Modifier.padding(end = 4.dp)
+                                label = { Text(lang, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
                             )
                         }
                     }
+                }
 
-                    // Action Buttons (Run & Share)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                // Row 2: Action Controls & View Switcher
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TabPill(title = "📝 Code", selected = activeTab == 0) { activeTab = 0 }
+                        TabPill(title = "🌐 Live View", selected = activeTab == 1) { activeTab = 1 }
+                        TabPill(
+                            title = if (consoleLogs.isNotEmpty()) "📟 Console (${consoleLogs.size})" else "📟 Console",
+                            selected = activeTab == 2
+                        ) { activeTab = 2 }
+                    }
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Button(
                             onClick = { runCode() },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
@@ -218,10 +255,8 @@ print("--- Execution Complete ---")
                         ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = "Run", modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Run", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text("Run", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
-
-                        Spacer(modifier = Modifier.width(6.dp))
 
                         IconButton(
                             onClick = {
@@ -230,21 +265,9 @@ print("--- Execution Complete ---")
                             },
                             modifier = Modifier.size(36.dp)
                         ) {
-                            Icon(Icons.Default.Share, contentDescription = "Share to Mesh", tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Share, contentDescription = "Share", tint = Color(0xFF38BDF8), modifier = Modifier.size(18.dp))
                         }
                     }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // Tab Switcher (Editor / Output / Console)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    TabPill(title = "📝 Code Editor", selected = activeTab == 0) { activeTab = 0 }
-                    TabPill(title = "🌐 Live View", selected = activeTab == 1) { activeTab = 1 }
-                    TabPill(title = "📟 Console", selected = activeTab == 2) { activeTab = 2 }
                 }
             }
         }
@@ -260,48 +283,97 @@ print("--- Execution Complete ---")
                             .background(Color(0xFF0F172A))
                     ) {
                         val lines = currentCode.lines().size
-                        // Line number column
-                        Column(
-                            modifier = Modifier
-                                .width(36.dp)
-                                .fillMaxHeight()
-                                .background(Color(0xFF1E293B).copy(alpha = 0.5f))
-                                .verticalScroll(rememberScrollState())
-                                .padding(vertical = 12.dp),
-                            horizontalAlignment = Alignment.End
-                        ) {
-                            for (i in 1..maxOf(lines, 20)) {
-                                Text(
-                                    text = "$i ",
-                                    color = Color(0xFF64748B),
-                                    fontSize = 12.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    modifier = Modifier.padding(end = 6.dp)
-                                )
-                            }
-                        }
+                        val verticalScrollState = rememberScrollState()
+                        val horizontalScrollState = rememberScrollState()
 
-                        // Code Editor Input Area
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .padding(12.dp)
-                                .verticalScroll(rememberScrollState())
-                                .horizontalScroll(rememberScrollState())
-                        ) {
-                            BasicTextField(
-                                value = currentCode,
-                                onValueChange = { updateCurrentCode(it) },
-                                textStyle = TextStyle(
-                                    color = Color(0xFFE2E8F0),
-                                    fontSize = 13.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    lineHeight = 18.sp
-                                ),
-                                cursorBrush = SolidColor(Color(0xFF38BDF8)),
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            // Quick Coding Symbols Bar (like online web IDEs)
+                            Surface(
+                                color = Color(0xFF1E293B),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState())
+                                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    listOf("Tab", "{", "}", "(", ")", "[", "]", ";", "=", "\"", "'", "<", ">", "/", "+", "=>").forEach { symbol ->
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = Color(0xFF0F172A),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155)),
+                                            modifier = Modifier.clickable {
+                                                val insertion = if (symbol == "Tab") "  " else symbol
+                                                updateCurrentCode(currentCode + insertion)
+                                            }
+                                        ) {
+                                            Text(
+                                                text = symbol,
+                                                color = Color(0xFF38BDF8),
+                                                fontSize = 12.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Code and Line Numbers Area
+                            Row(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF0F172A))
+                            ) {
+                                // Gutter
+                                Column(
+                                    modifier = Modifier
+                                        .width(40.dp)
+                                        .fillMaxHeight()
+                                        .background(Color(0xFF1E293B).copy(alpha = 0.6f))
+                                        .verticalScroll(verticalScrollState)
+                                        .padding(vertical = 12.dp),
+                                    horizontalAlignment = Alignment.End
+                                ) {
+                                    for (i in 1..maxOf(lines, 25)) {
+                                        Text(
+                                            text = "$i ",
+                                            color = Color(0xFF64748B),
+                                            fontSize = 12.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier.padding(end = 6.dp)
+                                        )
+                                    }
+                                }
+
+                                // Code Editor Input Area
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .padding(12.dp)
+                                        .verticalScroll(verticalScrollState)
+                                        .horizontalScroll(horizontalScrollState)
+                                ) {
+                                    BasicTextField(
+                                        value = currentCode,
+                                        onValueChange = { updateCurrentCode(it) },
+                                        textStyle = TextStyle(
+                                            color = Color(0xFFE2E8F0),
+                                            fontSize = 13.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            lineHeight = 18.sp
+                                        ),
+                                        cursorBrush = SolidColor(Color(0xFF38BDF8)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -321,11 +393,23 @@ print("--- Execution Complete ---")
                                     settings.builtInZoomControls = true
                                     settings.displayZoomControls = false
                                     webViewClient = WebViewClient()
+                                    webChromeClient = object : android.webkit.WebChromeClient() {
+                                        override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
+                                            consoleMessage?.let {
+                                                appendLog("📝 [LOG]: ${it.message()}")
+                                            }
+                                            return true
+                                        }
+                                    }
                                     loadDataWithBaseURL("http://127.0.0.1:8080/", codeHtml, "text/html", "UTF-8", null)
+                                    webViewRef = this
                                 }
                             },
                             update = { wv ->
-                                wv.loadDataWithBaseURL("http://127.0.0.1:8080/", codeHtml, "text/html", "UTF-8", null)
+                                webViewRef = wv
+                                if (activeTab == 1) {
+                                    wv.loadDataWithBaseURL("http://127.0.0.1:8080/", codeHtml, "text/html", "UTF-8", null)
+                                }
                             },
                             modifier = Modifier.fillMaxSize()
                         )

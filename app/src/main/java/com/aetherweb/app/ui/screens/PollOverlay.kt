@@ -46,15 +46,32 @@ fun PollOverlay(
             )
             
             if (poll.attachmentUrl.isNotEmpty()) {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                val localFile = remember(poll.attachmentUrl) {
+                    com.aetherweb.app.MeshStorageManager.findLocalFile(context, poll.attachmentUrl)
+                }
+                val resolvedModel: Any = remember(poll.attachmentUrl, localFile) {
+                    when {
+                        localFile != null && localFile.exists() -> localFile
+                        poll.attachmentUrl.startsWith("content://") || poll.attachmentUrl.startsWith("file://") -> android.net.Uri.parse(poll.attachmentUrl)
+                        else -> poll.attachmentUrl
+                    }
+                }
+                val imageRequest = remember(resolvedModel, context) {
+                    coil.request.ImageRequest.Builder(context)
+                        .data(resolvedModel)
+                        .crossfade(true)
+                        .build()
+                }
                 Spacer(modifier = Modifier.height(12.dp))
                 AsyncImage(
-                    model = poll.attachmentUrl,
+                    model = imageRequest,
                     contentDescription = "Poll Image",
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 200.dp)
+                        .heightIn(max = 240.dp)
                         .clip(RoundedCornerShape(8.dp)),
-                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
                 )
                 Spacer(modifier = Modifier.height(4.dp))
             }

@@ -19,27 +19,69 @@ object NetworkUtils {
     }
 
     // Prioritize interface names. Lower index = higher priority.
-    private val priorityInterfaces = listOf("ap0", "ap1", "swlan0", "wlan1", "wlan0")
+    private val priorityInterfaces = listOf("ap0", "ap1", "softap0", "swlan0", "wlan1", "wlan0")
 
-    fun getLocalIpAddress(): String {
+    fun getAllLocalIps(): Map<String, String> {
+        val ips = mutableMapOf<String, String>()
         try {
-            val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
-            val ips = mutableMapOf<String, String>()
-            
+            val interfaces = java.net.NetworkInterface.getNetworkInterfaces() ?: return ips
             while (interfaces.hasMoreElements()) {
                 val intf = interfaces.nextElement()
-                // Skip inactive or loopback interfaces
                 if (intf.isLoopback || !intf.isUp) continue
-                
                 val addrs = intf.inetAddresses
                 while (addrs.hasMoreElements()) {
                     val addr = addrs.nextElement()
                     if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
-                        val ip = addr.hostAddress ?: continue
-                        ips[intf.name] = ip
+                        val host = addr.hostAddress ?: continue
+                        if (!host.startsWith("127.")) {
+                            ips[intf.name] = host
+                        }
                     }
                 }
             }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return ips
+    }
+
+    fun getWifiIp(): String? {
+        val ips = getAllLocalIps()
+        // Wi-Fi client interfaces (phone connected to a home/office router)
+        for ((name, ip) in ips) {
+            if (name.startsWith("wlan") || name.startsWith("eth") || name.startsWith("en")) {
+                return ip
+            }
+        }
+        for ((name, ip) in ips) {
+            if (!name.startsWith("ap") && !name.startsWith("softap") && !name.startsWith("p2p") && !name.startsWith("rmnet") && !name.startsWith("ccmni")) {
+                if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")) {
+                    return ip
+                }
+            }
+        }
+        return null
+    }
+
+    fun getHotspotIp(): String? {
+        val ips = getAllLocalIps()
+        // Tethering / AP interfaces
+        for ((name, ip) in ips) {
+            if (name.startsWith("ap") || name.startsWith("softap") || name.startsWith("swlan")) {
+                return ip
+            }
+        }
+        for ((_, ip) in ips) {
+            if (ip.startsWith("192.168.43.") || ip.startsWith("192.168.49.") || ip.startsWith("192.168.50.")) {
+                return ip
+            }
+        }
+        return null
+    }
+
+    fun getLocalIpAddress(): String {
+        try {
+            val ips = getAllLocalIps()
 
             // 1. Look for known hotspot/wifi interfaces in priority order
             for (intfName in priorityInterfaces) {
@@ -48,33 +90,29 @@ object NetworkUtils {
                 }
             }
 
-            // 2. Look for ANY interface that starts with "wlan", "ap", "swlan"
+            // 2. Look for ANY interface that starts with "wlan", "ap", "swlan", "softap"
             for ((name, ip) in ips) {
-                if (name.startsWith("wlan") || name.startsWith("ap") || name.startsWith("swlan")) {
+                if (name.startsWith("wlan") || name.startsWith("ap") || name.startsWith("swlan") || name.startsWith("softap")) {
                     return ip
                 }
             }
 
-            // 3. Look for standard private IP ranges (Hotspot often uses 192.168.x.x)
-            // But skip common cellular interfaces like "rmnet"
+            // 3. Look for standard private IP ranges (skip cellular)
             for ((name, ip) in ips) {
-                if (name.startsWith("rmnet") || name.startsWith("ccmni")) continue // Skip cellular
-                
-                if (ip.startsWith("192.168.43.") || ip.startsWith("192.168.49.") || ip.startsWith("192.168.")) {
+                if (name.startsWith("rmnet") || name.startsWith("ccmni") || name.startsWith("pdp") || name.startsWith("cellular")) continue
+                if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")) {
                     return ip
                 }
             }
             
-            // 4. Look for ANY non-cellular interface
+            // 4. Any non-cellular
             for ((name, ip) in ips) {
                 if (!name.startsWith("rmnet") && !name.startsWith("ccmni") && !name.startsWith("pdp") && !name.startsWith("cellular")) {
                     return ip
                 }
             }
 
-            // 5. Fallback to any available IP
             return ips.values.firstOrNull() ?: "127.0.0.1"
-
         } catch (e: Exception) {
             e.printStackTrace()
         }

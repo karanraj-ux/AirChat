@@ -66,7 +66,7 @@ object PortalCertManager {
             val now = Date()
             val expiry = Date(now.time + 10L * 365L * 24L * 60L * 60L * 1000L) // 10 years
             val serial = BigInteger(64, SecureRandom())
-            val dn = X500Name("CN=$hostIp, O=AetherWeb, OU=Local Voice Portal")
+            val dn = X500Name("CN=$hostIp, O=AirChat, OU=Local Voice Portal")
 
             val builder = JcaX509v3CertificateBuilder(
                 dn, serial, now, expiry, dn, keyPair.public

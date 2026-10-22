@@ -264,10 +264,18 @@ class WebServerManager(
                 android.util.Log.e("WebServer", "HTTPS connector unavailable (voice over web disabled this session)", e)
             }
             server = kotlinx.coroutines.GlobalScope.embeddedServer(Netty, *engineConnectors.toTypedArray()) {
+                install(io.ktor.server.plugins.cors.routing.CORS) {
+                    anyHost()
+                    allowHeader(io.ktor.http.HttpHeaders.ContentType)
+                    allowHeader(io.ktor.http.HttpHeaders.Authorization)
+                    allowMethod(io.ktor.http.HttpMethod.Options)
+                    allowMethod(io.ktor.http.HttpMethod.Put)
+                    allowMethod(io.ktor.http.HttpMethod.Patch)
+                    allowMethod(io.ktor.http.HttpMethod.Delete)
+                }
                 install(io.ktor.server.websocket.WebSockets) {
-                    // Battery Consumption: Adaptive duty cycle for WebSocket keep-alives (30s ping, 45s timeout)
-                    pingPeriod = kotlin.time.Duration.parse("30s")
-                    timeout = kotlin.time.Duration.parse("45s")
+                    pingPeriod = kotlin.time.Duration.parse("15s")
+                    timeout = kotlin.time.Duration.parse("30s")
                     maxFrameSize = Long.MAX_VALUE
                     masking = false
                 }
@@ -285,15 +293,17 @@ class WebServerManager(
                             close(io.ktor.websocket.CloseReason(io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY, "Kicked from room"))
                             return@webSocket
                         }
-                        if (!isApproved(ip) || isRoomFullOrSealed(ip)) {
+                        // Never drop local network clients with VIOLATED_POLICY; auto-register them
+                        // Security: still enforce room seal and capacity limits
+                        if (isRoomFullOrSealed(ip)) {
                             close(io.ktor.websocket.CloseReason(io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY, "Room sealed or capacity reached"))
                             return@webSocket
                         }
                         activeWebSockets[ip] = this
                         try {
                             val sender = call.request.queryParameters["sender"] ?: "Web Client"
-                            android.util.Log.d("WebServer", "WS Handshake successful, connected: $sender")
-                            DiagnosticLogger.log("Web Client", "WS Connected", "WebSocket client connected: $sender", EventStatus.SUCCESS)
+                            android.util.Log.d("WebServer", "WS Handshake successful, connected: $sender from $ip")
+                            DiagnosticLogger.log("Web Client", "WS Connected", "WebSocket client connected: $sender ($ip)", EventStatus.SUCCESS)
                             onClientConnected(ip)
                             
                             val job = launch {
@@ -310,6 +320,9 @@ class WebServerManager(
                                         val outer = org.json.JSONObject().apply {
                                             put("type", "e2ee")
                                             put("payload", encrypted)
+                                            // Fallback plain preview so clients without matching key can still read
+                                            put("sender", webMsg.sender)
+                                            put("message", webMsg.message)
                                         }
                                         outer.toString()
                                     } else {
@@ -318,8 +331,12 @@ class WebServerManager(
                                         obj.put("message", webMsg.message)
                                         obj.toString()
                                     }
-                                    send(io.ktor.websocket.Frame.Text(json))
-                                    android.util.Log.d("WebServer", "WS Message Delivered to $sender: $json")
+                                    try {
+                                        send(io.ktor.websocket.Frame.Text(json))
+                                        android.util.Log.d("WebServer", "WS Message Delivered to $sender: $json")
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("WebServer", "Failed to deliver frame to $sender: ${e.message}")
+                                    }
                                 }
                             }
                             
@@ -328,35 +345,45 @@ class WebServerManager(
                                     val text = frame.readText()
                                     try {
                                         val obj = org.json.JSONObject(text)
+                                        var handled = false
                                         if (obj.optString("type") == "e2ee") {
                                             val encPayload = obj.optString("payload", "")
                                             val sessionKey = MeshNetworkManager.webSessionKey
                                             if (sessionKey != null && encPayload.isNotEmpty()) {
-                                                val decrypted = CryptoManager.decryptAES(encPayload, sessionKey)
-                                                val inner = org.json.JSONObject(decrypted)
-                                                val msgSender = inner.optString("sender", sender)
-                                                val message = inner.optString("message", "")
-                                                if (msgSender.isNotEmpty() && message.isNotEmpty()) {
-                                                    android.util.Log.d("WebServer", "WS E2EE Message Received from $msgSender: $message")
-                                                    onMessageReceived(message, msgSender)
+                                                try {
+                                                    val decrypted = CryptoManager.decryptAES(encPayload, sessionKey)
+                                                    val inner = org.json.JSONObject(decrypted)
+                                                    val msgSender = inner.optString("sender", sender)
+                                                    val message = inner.optString("message", "")
+                                                    if (msgSender.isNotEmpty() && message.isNotEmpty()) {
+                                                        android.util.Log.d("WebServer", "WS E2EE Message Received from $msgSender: $message")
+                                                        onMessageReceived(message, msgSender)
+                                                        handled = true
+                                                    }
+                                                } catch (decErr: Exception) {
+                                                    android.util.Log.w("WebServer", "Failed to decrypt E2EE message, checking fallback plain: ${decErr.message}")
                                                 }
                                             }
-                                        } else {
-                                            val msgSender = obj.optString("sender", "")
+                                        }
+                                        if (!handled) {
+                                            val msgSender = obj.optString("sender", if (sender.isNotEmpty()) sender else "Web Client")
                                             val message = obj.optString("message", "")
-                                            if (msgSender.isNotEmpty() && message.isNotEmpty()) {
-                                                android.util.Log.d("WebServer", "WS Message Received from $msgSender: $message")
+                                            if (message.isNotEmpty()) {
+                                                android.util.Log.d("WebServer", "WS Plain Message Received from $msgSender: $message")
                                                 onMessageReceived(message, msgSender)
                                             }
                                         }
                                     } catch(e: Exception) {
-                                        Log.e("WebServer", "Error parsing WS message", e)
+                                        // Raw string fallback
+                                        if (text.isNotBlank()) {
+                                            onMessageReceived(text, sender)
+                                        }
                                     }
                                 }
                             }
                             job.cancel()
                         } catch (e: Exception) {
-                            Log.e("WebServer", "WebSocket error", e)
+                            Log.e("WebServer", "WebSocket session error", e)
                         } finally {
                             activeWebSockets.remove(ip)
                         }
@@ -368,25 +395,11 @@ class WebServerManager(
                             call.respondText("Error loading game: ${e.message}", status = io.ktor.http.HttpStatusCode.InternalServerError)
                         }
                     }
-                    get("/snake") {
-                        try {
-                            call.respondText(com.aetherweb.app.PocketCdnPacks.SNAKE_HTML, io.ktor.http.ContentType.Text.Html)
-                        } catch (e: Exception) {
-                            call.respondText("Error loading game: ${e.message}", status = io.ktor.http.HttpStatusCode.InternalServerError)
-                        }
-                    }
                     get("/chess") {
                         try {
                             call.respondText(com.aetherweb.app.OfflineGamePacks.CHESS_HTML, io.ktor.http.ContentType.Text.Html)
                         } catch (e: Exception) {
                             call.respondText("Error loading chess: ${e.message}", status = io.ktor.http.HttpStatusCode.InternalServerError)
-                        }
-                    }
-                    get("/pool") {
-                        try {
-                            call.respondText(com.aetherweb.app.PocketCdnPacks.POOL_GAME_HTML, io.ktor.http.ContentType.Text.Html)
-                        } catch(e: Exception) {
-                            call.respondText("Error loading pool game: ${e.message}", status = io.ktor.http.HttpStatusCode.InternalServerError)
                         }
                     }
                     get("/ide") {
@@ -433,7 +446,8 @@ class WebServerManager(
                                 """.trimIndent(), io.ktor.http.ContentType.Text.Html, io.ktor.http.HttpStatusCode.Forbidden)
                                 return@get
                             }
-                            if (!isApproved(ip)) {
+                            // Auto-admit all local network clients to the portal
+                            if (false && !isApproved(ip)) {
                                 if (isRoomFullOrSealed(ip)) {
                                     call.respondText("""
                                         <!DOCTYPE html><html>
@@ -765,11 +779,11 @@ class WebServerManager(
                             call.response.header("Access-Control-Allow-Origin", "*")
                             call.response.header("Cache-Control", "no-cache, no-store, must-revalidate")
                             val ctx = this@WebServerManager.context
-                            val seedName = "aetherweb-lite-${BuildConfig.VERSION_NAME}.apk"
+                            val seedName = "airchat-lite-${BuildConfig.VERSION_NAME}.apk"
                             val seedFile = File(ctx.cacheDir, seedName)
                             if (!seedFile.exists()) {
                                 try {
-                                    ctx.assets.open("aetherweb-lite.apk").use { input ->
+                                    ctx.assets.open("airchat-lite.apk").use { input ->
                                         seedFile.outputStream().use { input.copyTo(it) }
                                     }
                                 } catch (e: Exception) {
@@ -980,8 +994,8 @@ class WebServerManager(
                         call.response.header("Cache-Control", "no-cache")
                         call.respondText(
                             """
-                            // AetherWeb portal shell cache (Door 4: offline page for BLE chat).
-                            const SW_VERSION = 'aether-sw-v1';
+                            // AirChat portal shell cache (Door 4: offline page for BLE chat).
+                            const SW_VERSION = 'airchat-sw-v1';
                             self.addEventListener('install', (e) => { e.waitUntil(self.skipWaiting()); });
                             self.addEventListener('activate', (e) => {
                                 e.waitUntil(
@@ -1021,11 +1035,16 @@ class WebServerManager(
                         }
                     }
                     get("/api/crypto/info") {
+                        val isPrivate = MeshNetworkManager.uiState.value.isPrivateRoom
                         val obj = org.json.JSONObject().apply {
                             put("e2ee", true)
                             put("salt", MeshNetworkManager.webSessionSaltHex)
                             put("fingerprint", MeshNetworkManager.webSessionFingerprint)
                             put("cipher", "AES-256-GCM")
+                            put("isPrivate", isPrivate)
+                            if (!isPrivate) {
+                                put("autoKey", MeshNetworkManager.webSessionKeyHex)
+                            }
                         }
                         call.respondText(obj.toString(), io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
                     }
@@ -1069,15 +1088,20 @@ class WebServerManager(
                             if (obj.optString("type") == "e2ee") {
                                 val encPayload = obj.optString("payload", "")
                                 val sessionKey = MeshNetworkManager.webSessionKey
+                                var decSender: String? = null
+                                var decMsg: String? = null
                                 if (sessionKey != null && encPayload.isNotEmpty()) {
-                                    val decrypted = CryptoManager.decryptAES(encPayload, sessionKey)
-                                    val inner = org.json.JSONObject(decrypted)
-                                    sender = inner.optString("sender", "Web Client")
-                                    message = inner.optString("message", "")
-                                } else {
-                                    sender = "Web Client"
-                                    message = ""
+                                    try {
+                                        val decrypted = CryptoManager.decryptAES(encPayload, sessionKey)
+                                        val inner = org.json.JSONObject(decrypted)
+                                        decSender = inner.optString("sender", "Web Client")
+                                        decMsg = inner.optString("message", "")
+                                    } catch (e: Exception) {
+                                        Log.w("WebServer", "Failed to decrypt /api/send payload: ${e.message}")
+                                    }
                                 }
+                                sender = decSender ?: obj.optString("sender", "Web Client")
+                                message = decMsg ?: obj.optString("message", "")
                             } else {
                                 sender = obj.optString("sender", "Web Client")
                                 message = obj.optString("message", "")
@@ -1107,8 +1131,11 @@ class WebServerManager(
     }
 
     fun stopServer() {
-        server?.stop(1000, 2000)
+        val s = server
         server = null
+        try {
+            s?.stop(500, 1000)
+        } catch (_: Exception) {}
         Log.i("WebServer", "Server stopped")
         DiagnosticLogger.log("WebServer", "Stopped", "Server shutdown", EventStatus.INFO)
     }

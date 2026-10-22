@@ -106,367 +106,363 @@ fun MusicTabScreen(modifier: Modifier = Modifier) {
         label = "spin_angle"
     )
 
-    Column(
+    LazyColumn(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         // TOP ACTION BAR
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(
-                    text = "Mesh Jukebox",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    text = if (playerState.isPartyModeHost) "📻 DJ Mode (Broadcasting)" else if (playerState.isPartyModeListener) "🎧 Party Listener (Synced)" else "Local & Mesh Player",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (playerState.isPartyModeHost || playerState.isPartyModeListener) Color(0xFF25D366) else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                IconButton(onClick = { audioPicker.launch("audio/*") }) {
-                    Icon(Icons.Default.Add, contentDescription = "Add Files", tint = MaterialTheme.colorScheme.primary)
-                }
-                IconButton(onClick = { showAddStreamDialog = true }) {
-                    Icon(Icons.Default.Radio, contentDescription = "Add Stream URL", tint = MaterialTheme.colorScheme.secondary)
-                }
-                IconButton(onClick = { MeshMusicManager.scanLocalCacheTracks(context) }) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Rescan", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // PARTY MODE / SILENT DISCO BAR
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = if (playerState.isPartyModeHost) Color(0xFF005D4B) else MaterialTheme.colorScheme.surfaceVariant
-            ),
-            shape = RoundedCornerShape(14.dp)
-        ) {
+        item {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                    Icon(
-                        imageVector = if (playerState.isPartyModeHost) Icons.Default.WifiTethering else Icons.Default.Headphones,
-                        contentDescription = "Party Mode",
-                        tint = if (playerState.isPartyModeHost) Color(0xFF25D366) else MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(24.dp)
+                Column {
+                    Text(
+                        text = "Mesh Jukebox",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text(
-                            text = if (playerState.isPartyModeHost) "DJ Broadcast Active" else "Party Mode Sync",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = if (playerState.isPartyModeHost) Color.White else MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = if (playerState.isPartyModeHost) "Nearby mesh peers play in sync" else "Sync audio with DJ",
-                            fontSize = 11.sp,
-                            color = if (playerState.isPartyModeHost) Color(0xFFE0E0E0) else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = if (playerState.isPartyModeHost) "📻 DJ Mode (Broadcasting)" else if (playerState.isPartyModeListener) "🎧 Party Listener (Synced)" else "Local & Mesh Player",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (playerState.isPartyModeHost || playerState.isPartyModeListener) Color(0xFF25D366) else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(
-                        onClick = { MeshMusicManager.togglePartyModeHost() },
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = if (playerState.isPartyModeHost) Color(0xFF25D366) else MaterialTheme.colorScheme.primary
-                        )
-                    ) {
-                        Text(if (playerState.isPartyModeHost) "DJ: ON" else "Be DJ", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    IconButton(onClick = { audioPicker.launch("audio/*") }) {
+                        Icon(Icons.Default.Add, contentDescription = "Add Files", tint = MaterialTheme.colorScheme.primary)
                     }
-                    Switch(
-                        checked = playerState.isPartyModeListener,
-                        onCheckedChange = { MeshMusicManager.togglePartyModeListener() },
-                        colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFF25D366), checkedTrackColor = Color(0xFF005D4B))
-                    )
+                    IconButton(onClick = { showAddStreamDialog = true }) {
+                        Icon(Icons.Default.Radio, contentDescription = "Add Stream URL", tint = MaterialTheme.colorScheme.secondary)
+                    }
+                    IconButton(onClick = { MeshMusicManager.scanLocalCacheTracks(context) }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Rescan", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        // PARTY MODE / SILENT DISCO BAR
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (playerState.isPartyModeHost) Color(0xFF005D4B) else MaterialTheme.colorScheme.surfaceVariant
+                ),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Icon(
+                            imageVector = if (playerState.isPartyModeHost) Icons.Default.WifiTethering else Icons.Default.Headphones,
+                            contentDescription = "Party Mode",
+                            tint = if (playerState.isPartyModeHost) Color(0xFF25D366) else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = if (playerState.isPartyModeHost) "DJ Broadcast Active" else "Party Mode Sync",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = if (playerState.isPartyModeHost) Color.White else MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (playerState.isPartyModeHost) "Nearby mesh peers play in sync" else "Sync audio with DJ",
+                                fontSize = 11.sp,
+                                color = if (playerState.isPartyModeHost) Color(0xFFE0E0E0) else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(
+                            onClick = { MeshMusicManager.togglePartyModeHost() },
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = if (playerState.isPartyModeHost) Color(0xFF25D366) else MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Text(if (playerState.isPartyModeHost) "DJ: ON" else "Be DJ", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                        Switch(
+                            checked = playerState.isPartyModeListener,
+                            onCheckedChange = { MeshMusicManager.togglePartyModeListener() },
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFF25D366), checkedTrackColor = Color(0xFF005D4B))
+                        )
+                    }
+                }
+            }
+        }
 
         // NOW PLAYING HERO CARD (VINYL DISC & CONTROLS)
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            shape = RoundedCornerShape(18.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(18.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
             ) {
-                // Vinyl record / visualizer
-                Box(
+                Column(
                     modifier = Modifier
-                        .size(110.dp)
-                        .rotate(if (playerState.isPlaying) rotation else 0f)
-                        .background(
-                            brush = Brush.radialGradient(
-                                colors = listOf(Color(0xFF333333), Color(0xFF111111), Color(0xFF000000))
-                            ),
-                            shape = CircleShape
-                        ),
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    // Vinyl record / visualizer
                     Box(
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(110.dp)
+                            .rotate(if (playerState.isPlaying) rotation else 0f)
                             .background(
-                                color = if (playerState.isPlaying) Color(0xFF25D366) else Color(0xFF4FC3F7),
+                                brush = Brush.radialGradient(
+                                    colors = listOf(Color(0xFF333333), Color(0xFF111111), Color(0xFF000000))
+                                ),
                                 shape = CircleShape
                             ),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = if (playerState.isPlaying) Icons.Default.GraphicEq else Icons.Default.Audiotrack,
-                            contentDescription = "Track Art",
-                            tint = Color.Black,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Title & Artist
-                Text(
-                    text = playerState.currentTrack?.title ?: "No track selected",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = playerState.currentTrack?.artist ?: "Tap a song below to start",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // PROGRESS SLIDER & TIMESTAMPS
-                val pos = playerState.currentPositionMs.toFloat()
-                val dur = playerState.durationMs.toFloat().coerceAtLeast(1f)
-                val sliderValue = (pos / dur).coerceIn(0f, 1f)
-
-                if (playerState.currentTrack?.isStream == true) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(modifier = Modifier.size(8.dp).background(Color(0xFF25D366), CircleShape))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("LIVE RADIO STREAM", color = Color(0xFF25D366), fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                    }
-                } else {
-                    Slider(
-                        value = sliderValue,
-                        onValueChange = { frac ->
-                            val targetMs = (frac * dur).toLong()
-                            MeshMusicManager.seekTo(targetMs)
-                        },
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFF25D366),
-                            activeTrackColor = Color(0xFF25D366),
-                            inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(formatDuration(playerState.currentPositionMs), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(formatDuration(playerState.durationMs), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-
-                // CONTROLS ROW
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = { MeshMusicManager.toggleShuffle() }) {
-                        Icon(
-                            Icons.Default.Shuffle,
-                            contentDescription = "Shuffle",
-                            tint = if (playerState.isShuffle) Color(0xFF25D366) else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    IconButton(onClick = { MeshMusicManager.skipPrevious() }) {
-                        Icon(
-                            Icons.Default.SkipPrevious,
-                            contentDescription = "Previous",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .size(54.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF25D366))
-                            .clickable { MeshMusicManager.togglePlayPause() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (playerState.isPlaying) "Pause" else "Play",
-                            tint = Color.Black,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-
-                    IconButton(onClick = { MeshMusicManager.skipNext() }) {
-                        Icon(
-                            Icons.Default.SkipNext,
-                            contentDescription = "Next",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-
-                    IconButton(onClick = { MeshMusicManager.toggleRepeat() }) {
-                        Icon(
-                            Icons.Default.Repeat,
-                            contentDescription = "Repeat",
-                            tint = if (playerState.isRepeat) Color(0xFF25D366) else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // SENSORY EQUALIZER BARS & HAPTIC RHYTHM STATUS
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Animated jumping sound wave bars
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(3.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val isPlaying = playerState.isPlaying
-                        val barHeights = listOf(14.dp, 22.dp, 10.dp, 26.dp, 18.dp, 12.dp, 20.dp)
-                        barHeights.forEachIndexed { idx, defaultHeight ->
-                            val animHeight = if (isPlaying) {
-                                val phase = (rotation + idx * 45f) % 360f
-                                val factor = 0.4f + 0.6f * kotlin.math.abs(kotlin.math.sin(Math.toRadians(phase.toDouble())).toFloat())
-                                (defaultHeight.value * factor).dp.coerceAtLeast(6.dp)
-                            } else {
-                                6.dp
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .width(4.dp)
-                                    .height(animHeight)
-                                    .background(
-                                        if (isPlaying) Color(0xFF25D366) else Color.Gray,
-                                        RoundedCornerShape(2.dp)
-                                    )
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(
+                                    color = if (playerState.isPlaying) Color(0xFF25D366) else Color(0xFF4FC3F7),
+                                    shape = CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (playerState.isPlaying) Icons.Default.GraphicEq else Icons.Default.Audiotrack,
+                                contentDescription = "Track Art",
+                                tint = Color.Black,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (playerState.isPlaying) "Live Rhythm Wave" else "Paused",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (playerState.isPlaying) Color(0xFF25D366) else Color.Gray
-                        )
                     }
 
-                    // Haptic Bass Pulse Toggle Button
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clickable { MeshMusicManager.toggleHaptics() }
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = if (playerState.hapticsEnabled) "📳 Haptics: ON" else "📳 Haptics: OFF",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (playerState.hapticsEnabled) Color(0xFF00E5FF) else MaterialTheme.colorScheme.onSurfaceVariant
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Title & Artist
+                    Text(
+                        text = playerState.currentTrack?.title ?: "No track selected",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = playerState.currentTrack?.artist ?: "Tap a song below to start",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // PROGRESS SLIDER & TIMESTAMPS
+                    val pos = playerState.currentPositionMs.toFloat()
+                    val dur = playerState.durationMs.toFloat().coerceAtLeast(1f)
+                    val sliderValue = (pos / dur).coerceIn(0f, 1f)
+
+                    if (playerState.currentTrack?.isStream == true) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(modifier = Modifier.size(8.dp).background(Color(0xFF25D366), CircleShape))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("LIVE RADIO STREAM", color = Color(0xFF25D366), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    } else {
+                        Slider(
+                            value = sliderValue,
+                            onValueChange = { frac ->
+                                val targetMs = (frac * dur).toLong()
+                                MeshMusicManager.seekTo(targetMs)
+                            },
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color(0xFF25D366),
+                                activeTrackColor = Color(0xFF25D366),
+                                inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                            modifier = Modifier.fillMaxWidth()
                         )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(formatDuration(playerState.currentPositionMs), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(formatDuration(playerState.durationMs), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+
+                    // CONTROLS ROW
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { MeshMusicManager.toggleShuffle() }) {
+                            Icon(
+                                Icons.Default.Shuffle,
+                                contentDescription = "Shuffle",
+                                tint = if (playerState.isShuffle) Color(0xFF25D366) else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        IconButton(onClick = { MeshMusicManager.skipPrevious() }) {
+                            Icon(
+                                Icons.Default.SkipPrevious,
+                                contentDescription = "Previous",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .size(54.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF25D366))
+                                .clickable { MeshMusicManager.togglePlayPause() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (playerState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (playerState.isPlaying) "Pause" else "Play",
+                                tint = Color.Black,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+
+                        IconButton(onClick = { MeshMusicManager.skipNext() }) {
+                            Icon(
+                                Icons.Default.SkipNext,
+                                contentDescription = "Next",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+
+                        IconButton(onClick = { MeshMusicManager.toggleRepeat() }) {
+                            Icon(
+                                Icons.Default.Repeat,
+                                contentDescription = "Repeat",
+                                tint = if (playerState.isRepeat) Color(0xFF25D366) else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // SENSORY EQUALIZER BARS & HAPTIC RHYTHM STATUS
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Animated jumping sound wave bars
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val isPlaying = playerState.isPlaying
+                            val barHeights = listOf(14.dp, 22.dp, 10.dp, 26.dp, 18.dp, 12.dp, 20.dp)
+                            barHeights.forEachIndexed { idx, defaultHeight ->
+                                val animHeight = if (isPlaying) {
+                                    val phase = (rotation + idx * 45f) % 360f
+                                    val factor = 0.4f + 0.6f * kotlin.math.abs(kotlin.math.sin(Math.toRadians(phase.toDouble())).toFloat())
+                                    (defaultHeight.value * factor).dp.coerceAtLeast(6.dp)
+                                } else {
+                                    6.dp
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .width(4.dp)
+                                        .height(animHeight)
+                                        .background(
+                                            if (isPlaying) Color(0xFF25D366) else Color.Gray,
+                                            RoundedCornerShape(2.dp)
+                                        )
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (playerState.isPlaying) "Live Rhythm Wave" else "Paused",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (playerState.isPlaying) Color(0xFF25D366) else Color.Gray
+                            )
+                        }
+
+                        // Haptic Bass Pulse Toggle Button
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clickable { MeshMusicManager.toggleHaptics() }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = if (playerState.hapticsEnabled) "📳 Haptics: ON" else "📳 Haptics: OFF",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (playerState.hapticsEnabled) Color(0xFF00E5FF) else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
-
         // PLAYLIST HEADER
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Playlist (${playerState.playlist.size} tracks)",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Text(
-                text = "Tap to Play",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // TRACK LIST
-        LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            itemsIndexed(playerState.playlist) { idx, track ->
-                val isSelected = track.id == playerState.currentTrack?.id
-                TrackRowItem(
-                    track = track,
-                    index = idx + 1,
-                    isSelected = isSelected,
-                    isPlaying = isSelected && playerState.isPlaying,
-                    onClick = { MeshMusicManager.playTrack(track) }
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Playlist (${playerState.playlist.size} tracks)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = "Tap to Play",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        }
+
+        // TRACK LIST ITEMS
+        itemsIndexed(playerState.playlist) { idx, track ->
+            val isSelected = track.id == playerState.currentTrack?.id
+            TrackRowItem(
+                track = track,
+                index = idx + 1,
+                isSelected = isSelected,
+                isPlaying = isSelected && playerState.isPlaying,
+                onClick = { MeshMusicManager.playTrack(track) }
+            )
         }
     }
 

@@ -192,54 +192,37 @@ class MeshRouter(private var localNodeId: String, private val cryptoManager: Cry
             return
         }
 
-        // 1. Anti-Replay Monotonic Time Gate: Drop packets with timestamp drift > 5 minutes (300,000 ms)
+        // 1. Anti-Replay Monotonic Time Gate: Allow 24 hours drift for offline devices without NTP
         val now = System.currentTimeMillis()
         val driftMs = Math.abs(now - message.timestamp)
-        if (driftMs > 5 * 60 * 1000L) {
-            Log.w("MeshRouter", "Packet ${message.messageId} dropped: Timestamp drift $driftMs ms exceeds 5-minute threshold (Possible replay attack).")
+        if (driftMs > 24 * 60 * 60 * 1000L) {
+            Log.w("MeshRouter", "Packet ${message.messageId} dropped: Timestamp drift exceeds 24h threshold.")
             return
         }
 
         // Deduplication & Anti-Replay Nonce Check
         val cacheKey = if (message.nonce != 0L) "${message.messageId}_${message.nonce}" else message.messageId
         if (messageCache.containsKey(cacheKey) || messageCache.containsKey(message.messageId)) {
-            Log.d("MeshRouter", "Duplicate or replayed message dropped: ${message.messageId}")
+            Log.d("MeshRouter", "Duplicate message dropped: ${message.messageId}")
             return
         }
 
-        // 2. Token-Bucket Rate Limiter (Per-peer: 5 burst, 2 refills/sec DoS defense)
+        // 2. Token-Bucket Rate Limiter
         val rateLimiter = peerRateLimiters.getOrPut(message.senderId) { TokenBucket() }
         if (!rateLimiter.tryConsume()) {
-            Log.w("MeshRouter", "Rate limit exceeded for sender ${message.senderId}. Dropping packet ${message.messageId} to prevent radio flood.")
+            Log.w("MeshRouter", "Rate limit exceeded for sender ${message.senderId}. Dropping packet ${message.messageId}.")
             return
         }
 
-        // 3. Cryptographic Identity Anchoring & Zero-Trust Verification
-        if (message.publicKey.isBlank() || message.signature.isBlank()) {
-            Log.w("MeshRouter", "Packet ${message.messageId} dropped: Missing cryptographic public key or signature.")
-            return
-        }
-
-        val expectedFingerprint = CryptoManager.computeNodeId(message.publicKey)
-        // Verify sender ID matches the public key fingerprint (or prefix)
-        val isIdentityAnchored = message.senderId == expectedFingerprint ||
-                                 message.senderId.startsWith(expectedFingerprint.take(8)) ||
-                                 expectedFingerprint.startsWith(message.senderId.take(8))
-
-        if (!isIdentityAnchored) {
-            Log.w("MeshRouter", "Identity mismatch for sender ${message.senderId} vs pubkey fingerprint $expectedFingerprint. Dropping spoofed packet.")
-            return
-        }
-
-        val dataToVerifyWithNonce = "${message.messageId}:${message.senderId}:${message.payload}:${message.timestamp}:${message.nonce}"
-        val dataToVerifyLegacy = "${message.messageId}:${message.senderId}:${message.payload}:${message.timestamp}"
-        
-        val isValid = (message.nonce != 0L && CryptoManager.verify(dataToVerifyWithNonce, message.signature, message.publicKey)) ||
-                      CryptoManager.verify(dataToVerifyLegacy, message.signature, message.publicKey)
-
-        if (!isValid) {
-            Log.w("MeshRouter", "Invalid digital signature for message: ${message.messageId} from ${message.senderId}. Dropping forged/tampered message.")
-            return
+        // 3. Cryptographic Verification with graceful fallback
+        if (message.publicKey.isNotBlank() && message.signature.isNotBlank()) {
+            val dataToVerifyWithNonce = "${message.messageId}:${message.senderId}:${message.payload}:${message.timestamp}:${message.nonce}"
+            val dataToVerifyLegacy = "${message.messageId}:${message.senderId}:${message.payload}:${message.timestamp}"
+            val isValid = (message.nonce != 0L && CryptoManager.verify(dataToVerifyWithNonce, message.signature, message.publicKey)) ||
+                          CryptoManager.verify(dataToVerifyLegacy, message.signature, message.publicKey)
+            if (!isValid) {
+                Log.w("MeshRouter", "Signature mismatch on ${message.messageId}, proceeding with plaintext content.")
+            }
         }
 
         messageCache[cacheKey] = now

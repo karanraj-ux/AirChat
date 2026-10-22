@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
@@ -420,6 +421,39 @@ fun MainChatScreen(
                             DropdownMenuItem(
                                 text = {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.VideoLibrary, contentDescription = null, tint = WhatsAppGreen, modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text("Offline Stream & Music", fontWeight = FontWeight.SemiBold)
+                                            Text("Local videos & P2P audio disco", style = MaterialTheme.typography.labelSmall, color = WhatsAppSubtleText)
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    showTopMenu = false
+                                    currentTab = "Media"
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Language, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text("Connect Laptop / PC", fontWeight = FontWeight.SemiBold)
+                                            Text("Open WebChat on Windows, Mac & Linux", style = MaterialTheme.typography.labelSmall, color = WhatsAppSubtleText)
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    showTopMenu = false
+                                    selectedQrTab = 0
+                                    showHotspotDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(Icons.Default.QrCode2, contentDescription = null, tint = WhatsAppGreen, modifier = Modifier.size(20.dp))
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Column {
@@ -430,6 +464,7 @@ fun MainChatScreen(
                                 },
                                 onClick = {
                                     showTopMenu = false
+                                    selectedQrTab = 1
                                     showHotspotDialog = true
                                 }
                             )
@@ -501,7 +536,7 @@ fun MainChatScreen(
                                         Spacer(modifier = Modifier.width(10.dp))
                                         Column {
                                             Text("Tools & Storage", fontWeight = FontWeight.SemiBold)
-                                            Text("Clipboard, 100MB Cache, Battery", style = MaterialTheme.typography.labelSmall, color = WhatsAppSubtleText)
+                                            Text("Unlimited Chat History, Cache & Battery", style = MaterialTheme.typography.labelSmall, color = WhatsAppSubtleText)
                                         }
                                     }
                                 },
@@ -528,14 +563,6 @@ fun MainChatScreen(
                         icon = { Icon(Icons.Default.Chat, "Chat") },
                         label = { Text("Chats") }
                     )
-                    if (!isLite) {
-                        NavigationBarItem(
-                            selected = currentTab == "Media" || currentTab == "Music",
-                            onClick = { currentTab = "Media" },
-                            icon = { Icon(Icons.Default.VideoLibrary, "Stream") },
-                            label = { Text("Stream") }
-                        )
-                    }
                     NavigationBarItem(
                         selected = currentTab == "Calls",
                         onClick = { currentTab = "Calls" },
@@ -2402,29 +2429,50 @@ fun MainChatScreen(
 
                         Spacer(Modifier.height(12.dp))
 
-                        // Separated 2 Tabs: [1. Mesh Wi-Fi QR] and [2. WebChat Browser QR]
+                        // 3 Dedicated Tabs: [0. 💻 Laptop / PC], [1. 📱 Wi-Fi QR], [2. 🌐 WebChat QR]
                         TabRow(
-                            selectedTabIndex = selectedQrTab,
+                            selectedTabIndex = selectedQrTab.coerceIn(0, 2),
                             containerColor = MaterialTheme.colorScheme.surfaceVariant,
                             contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                         ) {
                             Tab(
                                 selected = selectedQrTab == 0,
                                 onClick = { selectedQrTab = 0 },
-                                text = { Text("1. Mesh Wi-Fi QR", fontWeight = FontWeight.Bold) },
-                                icon = { Icon(Icons.Default.Wifi, contentDescription = "Wi-Fi QR") }
+                                text = { Text("💻 Laptop/PC", fontWeight = FontWeight.Bold, fontSize = 11.sp) },
+                                icon = { Icon(Icons.Default.Language, contentDescription = "Laptop / PC", modifier = Modifier.size(18.dp)) }
                             )
                             Tab(
                                 selected = selectedQrTab == 1,
                                 onClick = { selectedQrTab = 1 },
-                                text = { Text("2. WebChat QR", fontWeight = FontWeight.Bold) },
-                                icon = { Icon(Icons.Default.Language, contentDescription = "WebChat QR") }
+                                text = { Text("📱 Wi-Fi QR", fontWeight = FontWeight.Bold, fontSize = 11.sp) },
+                                icon = { Icon(Icons.Default.Wifi, contentDescription = "Wi-Fi QR", modifier = Modifier.size(18.dp)) }
+                            )
+                            Tab(
+                                selected = selectedQrTab == 2,
+                                onClick = { selectedQrTab = 2 },
+                                text = { Text("🌐 WebChat QR", fontWeight = FontWeight.Bold, fontSize = 11.sp) },
+                                icon = { Icon(Icons.Default.QrCode2, contentDescription = "WebChat QR", modifier = Modifier.size(18.dp)) }
                             )
                         }
 
-                        Spacer(Modifier.height(20.dp))
+                        Spacer(Modifier.height(16.dp))
+
+                        val wifiIp = NetworkUtils.getWifiIp()
+                        val hotspotIp = NetworkUtils.getHotspotIp()
+                        val resolvedIp = uiState.hotspotIp.ifEmpty { wifiIp ?: hotspotIp ?: NetworkUtils.getLocalIpAddress() }
 
                         if (selectedQrTab == 0) {
+                            // --- TAB 0: 💻 LAPTOP & PC ACCESS (ZERO INSTALLATION) ---
+                            LaptopConnectionTab(
+                                uiState = uiState,
+                                wifiIp = wifiIp,
+                                hotspotIp = hotspotIp,
+                                resolvedIp = resolvedIp,
+                                clipboard = clipboard,
+                                context = context,
+                                onStartHotspot = { showRoomSetupDialog = true }
+                            )
+                        } else if (selectedQrTab == 1) {
                             // --- TAB 1: QR CODE 1 - JOIN MESH WI-FI ---
                             Text(
                                 "QR Code 1: Join Mesh Wi-Fi",
@@ -2744,10 +2792,10 @@ fun MainChatScreen(
 
                             Spacer(Modifier.height(8.dp))
 
-                            if (uiState.hotspotIp.isNotEmpty()) {
-                                val baseUrl = "http://${uiState.hotspotIp}:8080"
+                            if (resolvedIp.isNotEmpty() && resolvedIp != "127.0.0.1") {
+                                val baseUrl = "http://$resolvedIp:8080"
                                 val qrUrl = if (uiState.webSessionKeyHex.isNotEmpty()) {
-                                    "http://${uiState.hotspotIp}:8080/#key=${uiState.webSessionKeyHex}&salt=${uiState.webSessionSaltHex}"
+                                    "http://$resolvedIp:8080/#key=${uiState.webSessionKeyHex}&salt=${uiState.webSessionSaltHex}"
                                 } else {
                                     baseUrl
                                 }
@@ -2876,11 +2924,8 @@ fun MainChatScreen(
                                     Column(modifier = Modifier.padding(14.dp)) {
                                         Text("Browser Web Addresses", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
                                         Spacer(Modifier.height(6.dp))
-                                        Text("Primary Link (DNS Captive Portal):", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                                        Text("http://nexus.run", fontWeight = FontWeight.Bold, color = WhatsAppGreen, style = MaterialTheme.typography.titleMedium)
-                                        Spacer(Modifier.height(6.dp))
-                                        Text("Direct IP Link:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                                        Text(baseUrl, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                        Text("Direct WebChat Link:", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                        Text(baseUrl, fontWeight = FontWeight.Bold, color = WhatsAppGreen, style = MaterialTheme.typography.titleMedium)
                                         Spacer(Modifier.height(12.dp))
                                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             OutlinedButton(
@@ -2962,19 +3007,19 @@ fun MainChatScreen(
                                     ) {
                                         Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.Gray)
                                         Spacer(Modifier.height(12.dp))
-                                        Text("WebChat Server Stopped", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                                        Text("No Local Network Detected", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                                         Spacer(Modifier.height(6.dp))
                                         Text(
-                                            "Start the Mesh Room to launch the local web server and generate the WebChat portal QR code.",
+                                            "Connect your phone to a Wi-Fi router or tap 'Start Mesh Hotspot' below to broadcast the WebChat portal.",
                                             style = MaterialTheme.typography.bodySmall,
                                             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                         Spacer(Modifier.height(16.dp))
                                         Button(
-                                            onClick = { viewModel.toggleHotspot(isPrivate = false) }
+                                            onClick = { showRoomSetupDialog = true }
                                         ) {
-                                            Text("Start Mesh Room & WebChat")
+                                            Text("Start Mesh Hotspot")
                                         }
                                     }
                                 }
@@ -3328,7 +3373,7 @@ fun MainChatScreen(
                                     color = WhatsAppGreen
                                 )
                                 Text(
-                                    "Adaptive battery duty cycles, automated 100MB storage pruner, packet compression, and speed benchmarks.",
+                                    "Adaptive battery duty cycles, unlimited permanent chat history, media cache pruning, and speed benchmarks.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -3385,7 +3430,7 @@ fun MainChatScreen(
 
                                 Spacer(Modifier.height(14.dp))
 
-                                // CARD 2: STORAGE FOOTPRINT (100MB MEDIA THRESHOLD)
+                                // CARD 2: STORAGE & MEDIA FOOTPRINT (UNLIMITED CHAT HISTORY)
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
@@ -3395,42 +3440,33 @@ fun MainChatScreen(
                                             Icon(Icons.Default.Storage, contentDescription = null, tint = WhatsAppGreen)
                                             Spacer(Modifier.width(8.dp))
                                             Column {
-                                                Text("Storage Footprint (100MB Cap)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
-                                                Text("Automated background sweeps every 15m", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                                Text("Local Storage & Chat History", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleSmall)
+                                                Text("Chat history is unlimited & stored on-device", style = MaterialTheme.typography.labelSmall, color = WhatsAppGreen)
                                             }
                                         }
 
                                         Spacer(Modifier.height(10.dp))
-                                        val maxBytes = 100 * 1024 * 1024L
                                         val currentBytes = uiState.cacheSizeBytes
-                                        val percent = (currentBytes.toFloat() / maxBytes.toFloat()).coerceIn(0f, 1f)
 
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.SpaceBetween
                                         ) {
                                             Text(
-                                                "Cache Used: ${com.aetherweb.app.MeshStorageManager.formatFileSize(currentBytes)}",
+                                                "Media Cache: ${com.aetherweb.app.MeshStorageManager.formatFileSize(currentBytes)}",
                                                 style = MaterialTheme.typography.labelMedium,
                                                 fontWeight = FontWeight.Bold
                                             )
                                             Text(
-                                                "Cap: 100 MB (${uiState.cacheFileCount} files)",
+                                                "Text: Unlimited (${uiState.cacheFileCount} files)",
                                                 style = MaterialTheme.typography.labelMedium,
                                                 color = Color.Gray
                                             )
                                         }
-                                        Spacer(Modifier.height(6.dp))
-                                        LinearProgressIndicator(
-                                            progress = { percent },
-                                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
-                                            color = if (percent > 0.85f) Color.Red else WhatsAppGreen,
-                                            trackColor = Color.DarkGray
-                                        )
 
                                         Spacer(Modifier.height(8.dp))
                                         Text(
-                                            "Files older than 24h and temp voice notes older than 6h are pruned. When media cache exceeds 100MB, oldest media is automatically evicted until below 60MB.",
+                                            "All chat text and messages are saved permanently on your device without limits. Temporary media cache files (voice notes/photos) can be cleared anytime without affecting your text history.",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -3442,7 +3478,7 @@ fun MainChatScreen(
                                         ) {
                                             Icon(Icons.Default.CleaningServices, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(Modifier.width(6.dp))
-                                            Text("Enforce 100MB Cap / Sweep Now")
+                                            Text("Clear Media Cache")
                                         }
 
                                         if (uiState.lastStorageSweepSummary != null) {
@@ -4263,24 +4299,6 @@ fun ChatTab(
             }
         }
 
-        // Active Game Banner in Chat
-        if (uiState.chessState.whitePlayerId.isNotEmpty()) {
-            Card(
-                modifier = Modifier.padding(16.dp).fillMaxWidth().clickable {
-                    // Quick jump back to active game
-                    if (uiState.chessState.whitePlayerId.isNotEmpty()) {
-                        viewModel.setSharedMedia("chess", "", "game", 2)
-                    }
-                },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-            ) {
-                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = "Active Game", tint = MaterialTheme.colorScheme.onPrimaryContainer)
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Text("Game in progress! Tap to join.", color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
 
         
         // Burner Room Banner
@@ -4308,7 +4326,78 @@ fun ChatTab(
             }
         }
         
+    val chatListState = rememberLazyListState()
+
+        // WhatsApp-style Pinned Message Banner
+        val pinnedMsg = remember(uiState.pinnedMessageId, uiState.messages) {
+            uiState.messages.find { it.id == uiState.pinnedMessageId }
+        }
+        if (pinnedMsg != null) {
+            Surface(
+                color = Color(0xFF1F2C34),
+                shape = RoundedCornerShape(10.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF25D366).copy(alpha = 0.4f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                    .clickable {
+                        coroutineScope.launch {
+                            chatListState.animateScrollToItem(0)
+                        }
+                    }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            Icons.Default.PushPin,
+                            contentDescription = "Pinned",
+                            tint = Color(0xFF25D366),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "Pinned: ${pinnedMsg.senderName}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF25D366)
+                            )
+                            Text(
+                                text = pinnedMsg.message,
+                                fontSize = 12.sp,
+                                color = Color(0xFFE9EDEF),
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    IconButton(
+                        onClick = { viewModel.togglePinMessage(pinnedMsg.id) },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Unpin",
+                            tint = Color(0xFF8696A0),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
+
         LazyColumn(
+            state = chatListState,
             modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
             contentPadding = PaddingValues(vertical = 16.dp),
             reverseLayout = true
@@ -4410,24 +4499,19 @@ fun ChatTab(
                     message = msg,
                     knownUserIds = uiState.knownUserIds,
                     isMentioned = isMentioned,
+                    isPinned = msg.id == uiState.pinnedMessageId,
+                    onPinMessage = { viewModel.togglePinMessage(msg.id) },
                     isFirstInThread = isFirstInThread,
                     isLastInThread = isLastInThread,
                     onUserClick = { onUserClick(msg) },
                     onSaveFile = { url -> viewModel.saveFileToDevice(context, url) },
                     onSaveImage = { url -> viewModel.saveImageToGallery(context, url) },
                     onOpenUrl = { url -> 
-                        if (url.startsWith("meshgame://")) {
-                            val game = url.removePrefix("meshgame://")
-                            viewModel.setSharedMedia(game, "", "game", 2)
-                        } else if (url == "meshfeed://open") {
-                            onNavigateToFeed()
+                        val isImage = com.aetherweb.app.MeshStorageManager.isImageFile(url)
+                        if (isImage) {
+                            fullScreenImageUrl = url
                         } else {
-                            val isImage = com.aetherweb.app.MeshStorageManager.isImageFile(url)
-                            if (isImage) {
-                                fullScreenImageUrl = url
-                            } else {
-                                viewModel.downloadAndOpenFile(context, url)
-                            }
+                            viewModel.downloadAndOpenFile(context, url)
                         }
                     }
                 )
@@ -4502,7 +4586,6 @@ fun ChatTab(
 
 @Composable
 fun ArcadeTab(uiState: MeshState, viewModel: MeshViewModel) {
-    var showPollBuilder by remember { mutableStateOf(false) }
     val ip = if (uiState.hotspotIp.isNotEmpty()) uiState.hotspotIp else "127.0.0.1"
 
     Column(
@@ -4538,7 +4621,7 @@ fun ArcadeTab(uiState: MeshState, viewModel: MeshViewModel) {
                     .background(Color(0xFF005D4B))
                     .padding(horizontal = 10.dp, vertical = 4.dp)
             ) {
-                Text("8 APPS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF25D366))
+                Text("3 GAMES + 2 STUDIOS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF25D366))
             }
         }
 
@@ -4651,7 +4734,7 @@ fun ArcadeTab(uiState: MeshState, viewModel: MeshViewModel) {
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // 3. BENTO GRID 2-COLUMN TILES (CHESS & CONNECT 4)
+        // 3. ESSENTIAL GAMES ROW 1: CYBER CHESS & TIC-TAC-TOE
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             BentoGameTile(
                 icon = "♟️",
@@ -4664,21 +4747,6 @@ fun ArcadeTab(uiState: MeshState, viewModel: MeshViewModel) {
             )
 
             BentoGameTile(
-                icon = "🔴",
-                title = "Connect 4",
-                subtitle = "Gravity Drop AI",
-                badge = "Pass & Play",
-                accentColor = Color(0xFFF59E0B),
-                modifier = Modifier.weight(1f),
-                onClick = { viewModel.setSharedMedia("connect4", "", "collaborative", 2) }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // 4. BENTO GRID 2-COLUMN TILES (TIC-TAC-TOE & LUDO)
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            BentoGameTile(
                 icon = "⭕",
                 title = "Tic-Tac-Toe",
                 subtitle = "Minimax AI Engine",
@@ -4686,56 +4754,6 @@ fun ArcadeTab(uiState: MeshState, viewModel: MeshViewModel) {
                 accentColor = Color(0xFF38BDF8),
                 modifier = Modifier.weight(1f),
                 onClick = { viewModel.setSharedMedia("tictactoe", "", "collaborative", 2) }
-            )
-
-            BentoGameTile(
-                icon = "🎲",
-                title = "Ludo Star",
-                subtitle = "4-Player Mesh Board",
-                badge = "Up to 4",
-                accentColor = Color(0xFFA855F7),
-                modifier = Modifier.weight(1f),
-                onClick = { viewModel.setSharedMedia("ludo", "", "collaborative", 4) }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // 5. BENTO GRID 2-COLUMN TILES (8-BALL POOL & SNAKE)
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            BentoGameTile(
-                icon = "🎱",
-                title = "Physics Pool",
-                subtitle = "Live Billiards Table",
-                badge = "Web & App",
-                accentColor = Color(0xFF3B82F6),
-                modifier = Modifier.weight(1f),
-                onClick = { viewModel.updateLocalSharedMedia("web", "http://$ip:8080/pool", com.aetherweb.app.MeshNetworkManager.localNodeId, "collaborative", 2, true) }
-            )
-
-            BentoGameTile(
-                icon = "🐍",
-                title = "Retro Snake",
-                subtitle = "Classic Offline Arcade",
-                badge = "Solo Score",
-                accentColor = Color(0xFF22C55E),
-                modifier = Modifier.weight(1f),
-                onClick = { viewModel.updateLocalSharedMedia("web", "http://$ip:8080/snake", com.aetherweb.app.MeshNetworkManager.localNodeId, "local", 0, true) }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // 6. PARTY TOOLS ROW (POLL & RANDOMIZER)
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            BentoGameTile(
-                icon = "📊",
-                title = "Live Poll",
-                subtitle = "Audience voting",
-                badge = "Interactive",
-                accentColor = Color(0xFFEC4899),
-                modifier = Modifier.weight(1f),
-                onClick = { showPollBuilder = true }
             )
 
             BentoGameTile(
@@ -4749,17 +4767,20 @@ fun ArcadeTab(uiState: MeshState, viewModel: MeshViewModel) {
             )
         }
 
-        if (showPollBuilder) {
-            com.aetherweb.app.ui.screens.PollBuilderDialog(
-                onDismiss = { showPollBuilder = false },
-                onStartPoll = { q, opts, uri ->
-                    viewModel.startPoll(q, opts, uri)
-                    showPollBuilder = false
-                }
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // 4. ESSENTIAL GAMES ROW 2: LUDO STAR (4-PLAYER BOARD)
+        Row(modifier = Modifier.fillMaxWidth()) {
+            BentoGameTile(
+                icon = "🎲",
+                title = "Ludo Star",
+                subtitle = "4-Player Mesh Board with Bot Fill & Dice Sync",
+                badge = "Up to 4 Players",
+                accentColor = Color(0xFFA855F7),
+                modifier = Modifier.fillMaxWidth(),
+                onClick = { viewModel.setSharedMedia("ludo", "", "collaborative", 4) }
             )
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
 
         Spacer(modifier = Modifier.height(24.dp))
     }

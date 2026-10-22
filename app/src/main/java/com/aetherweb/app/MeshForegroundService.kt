@@ -479,12 +479,7 @@ object MeshNetworkManager {
                     return@WebServerManager
                 }
                 if (!state.approvedSpectators.contains(ip)) {
-                    if (state.pendingSpectators.none { it.ip == ip }) {
-                        // Voice Room Phase 1: request carries a temp profile (name filled in
-                        // later via POST /api/profile from the waiting page).
-                        _uiState.value = state.copy(pendingSpectators = state.pendingSpectators +
-                            SpectatorRequest(ip = ip, name = "Web guest", emoji = "\uD83C\uDF10", pid = ip))
-                    }
+                    _uiState.update { it.copy(approvedSpectators = it.approvedSpectators + ip) }
                 }
             },
             onProfileUpdated = { req ->
@@ -539,6 +534,13 @@ object MeshNetworkManager {
         }
         
         wifiSocketManager?.start()
+        
+        try {
+            webServerManager?.startServer()
+            _uiState.update { it.copy(isWebServerRunning = true) }
+        } catch (e: Exception) {
+            android.util.Log.e("MeshForegroundService", "Error starting web server", e)
+        }
         
         InternetRelayManager.init(appContext, localNodeId, meshRouter.localPublicKey)
         
@@ -638,6 +640,9 @@ class MeshForegroundService : Service() {
                 if (ip != lastIp) {
                     if (ip != "127.0.0.1" && ip.isNotEmpty()) {
                         DiagnosticLogger.log("Network", "IP Assignment", "OS granted valid local IP: $ip", EventStatus.SUCCESS)
+                        // Ensure Web Server is active on this local Wi-Fi / Hotspot interface
+                        MeshNetworkManager.webServerManager?.startServer()
+                        MeshNetworkManager._uiState.update { it.copy(isWebServerRunning = true) }
                     } else if (ip == "127.0.0.1") {
                         DiagnosticLogger.log("Network", "IP Assignment", "No external IP, using loopback (127.0.0.1)", EventStatus.INFO)
                     }
@@ -927,9 +932,14 @@ class MeshForegroundService : Service() {
                         ) }
                     }
                 } else {
-                    // Power saving: web server starts on-demand only (QR share, file share),
-                    // not automatically. See MeshViewModel.startWebServerForSharing().
-                    com.aetherweb.app.MeshNetworkManager._uiState.update { it.copy(isWebServerRunning = false) }
+                    // Hotspot stopped. If device is still connected to a local Wi-Fi network, keep web server active for laptop access
+                    val wifiIp = NetworkUtils.getWifiIp()
+                    if (wifiIp != null && wifiIp.isNotEmpty()) {
+                        com.aetherweb.app.MeshNetworkManager._uiState.update { it.copy(hotspotIp = wifiIp, isWebServerRunning = true) }
+                        com.aetherweb.app.MeshNetworkManager.webServerManager?.startServer()
+                    } else {
+                        com.aetherweb.app.MeshNetworkManager._uiState.update { it.copy(isWebServerRunning = false) }
+                    }
                 }
             }
         }

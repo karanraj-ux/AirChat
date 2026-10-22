@@ -93,13 +93,9 @@ fun SharedMediaScreen(
     }
 
     val browserTabs = remember(defaultHostIp) {
-        // Host tabs: bundled tools render directly from the APK (no IP/HTTP).
-        // WebChat + Portal are guest-only (browser via QR) — not shown to the host.
         listOf(
             Triple("IDE", "💻 Code IDE", "http://$defaultHostIp:8080/ide"),
-            Triple("Pool", "🎱 Pool", "http://$defaultHostIp:8080/pool"),
-            Triple("Chess", "♟️ Chess", "http://$defaultHostIp:8080/chess"),
-            Triple("Snake", "🐍 Snake", "http://$defaultHostIp:8080/snake")
+            Triple("Chess", "♟️ Chess", "http://$defaultHostIp:8080/chess")
         )
     }
 
@@ -304,14 +300,6 @@ fun SharedMediaScreen(
                     com.aetherweb.app.ui.screens.TicTacToeScreen(
                         state = state.ticTacToeState,
                         onStateChange = { newState -> vm.broadcastTicTacToeState(newState) },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else if (mediaType == "connect4") {
-                    val vm: com.aetherweb.app.MeshViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
-                    val state by vm.uiState.collectAsState()
-                    com.aetherweb.app.ui.screens.Connect4Screen(
-                        state = state.connect4State,
-                        onStateChange = { newState -> vm.broadcastConnect4State(newState) },
                         modifier = Modifier.fillMaxSize()
                     )
                 } else if (mediaType == "ludo") {

@@ -22,6 +22,20 @@ import java.util.UUID
 object MeshPacketDispatcher {
     private const val TAG = "MeshPacketDispatcher"
     private val scope = CoroutineScope(Dispatchers.IO)
+    private val seenMessageIds = java.util.Collections.synchronizedSet(
+        object : java.util.LinkedHashSet<String>() {
+            override fun add(element: String): Boolean {
+                if (size > 1000) {
+                    val it = iterator()
+                    if (it.hasNext()) {
+                        it.next()
+                        it.remove()
+                    }
+                }
+                return super.add(element)
+            }
+        }
+    )
 
     fun dispatch(
         packet: MeshPacket,
@@ -37,9 +51,23 @@ object MeshPacketDispatcher {
 
         when (packet) {
             is MeshPacket.Chat -> {
+                // Drop loopback echo of our own outgoing messages (already added locally)
+                val isFromMyself = senderId == myNodeId || 
+                    (packet.senderHandle.isNotBlank() && packet.senderHandle == manager._uiState.value.localUsernameId) ||
+                    (packet.senderName.isNotBlank() && packet.senderName == manager._uiState.value.localUserName && packet.recipientId == null)
+                if (isFromMyself) {
+                    return true
+                }
+
                 // Private DM filtering: If recipientId is specified, ensure it is directed to me (or sent by me)
                 if (packet.recipientId != null && packet.recipientId != myNodeId && senderId != myNodeId) {
                     return true // Handled (ignored)
+                }
+
+                val pid = packet.messageId.ifBlank { messageId }
+                if (pid.isNotBlank() && !seenMessageIds.add(pid)) {
+                    // Already processed this exact message UUID
+                    return true
                 }
 
                 val state = manager._uiState.value
@@ -69,35 +97,32 @@ object MeshPacketDispatcher {
                     }
 
                     val newChatMessage = ChatMessage(
-                        id = packet.messageId.ifBlank { messageId.ifBlank { UUID.randomUUID().toString() } },
+                        id = pid.ifBlank { UUID.randomUUID().toString() },
                         senderName = resolvedSenderName,
                         senderHandle = packet.senderHandle,
                         senderId = senderId,
                         recipientId = packet.recipientId,
                         message = displayMessage,
-                        isFromMe = senderId == myNodeId,
+                        isFromMe = false,
                         timestamp = timestamp,
                         isBurner = packet.isBurner,
                         isEmergency = packet.isEmergency
                     )
 
+                    var wasAdded = false
                     manager._uiState.update { s ->
-                        // Dedup: skip if this message is already present. Own broadcasts
-                        // loop back through the mesh; without this check every sent
-                        // message appears twice. Prefer the packet's messageId.
-                        val pid = packet.messageId.ifBlank { messageId }
-                        val alreadyPresent = if (pid.isNotBlank()) {
-                            s.messages.any { it.id == pid }
-                        } else {
-                            // Legacy packets without IDs: fuzzy match on content.
-                            s.messages.any {
-                                it.senderId == senderId &&
-                                it.message == displayMessage &&
-                                kotlin.math.abs(it.timestamp - timestamp) < 5000
-                            }
+                        val alreadyPresent = s.messages.any { 
+                            it.id == newChatMessage.id ||
+                            (it.senderId == senderId && it.message == displayMessage && kotlin.math.abs(it.timestamp - timestamp) < 4000)
                         }
-                        if (alreadyPresent) s else s.copy(messages = s.messages + newChatMessage)
+                        if (alreadyPresent) {
+                            s
+                        } else {
+                            wasAdded = true
+                            s.copy(messages = s.messages + newChatMessage)
+                        }
                     }
+                    if (!wasAdded) return true
 
                     val isGhostMode = manager._uiState.value.isGhostMode
                     if (!packet.isBurner && !isGhostMode) {

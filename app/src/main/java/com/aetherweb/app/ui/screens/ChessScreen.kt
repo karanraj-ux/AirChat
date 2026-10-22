@@ -19,7 +19,6 @@ import com.aetherweb.app.ChessEngine
 import com.aetherweb.app.ChessState
 import com.aetherweb.app.GamePacing
 import com.aetherweb.app.MeshNetworkManager
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
 @Composable
@@ -196,34 +195,59 @@ fun ChessScreen(
 
         // Quick Mode Row
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                "🤖 Bot vs Bot Match",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF769656),
-                modifier = Modifier
-                    .background(Color(0xFF333333), RoundedCornerShape(6.dp))
-                    .clickable {
-                        onStateChange(state.copy(whitePlayerId = "bot", blackPlayerId = "bot"))
-                    }
-                    .padding(horizontal = 6.dp, vertical = 3.dp)
-            )
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = Color(0xFF334155),
+                modifier = Modifier.clickable {
+                    onStateChange(state.copy(whitePlayerId = "bot", blackPlayerId = "bot"))
+                }
+            ) {
+                Text(
+                    "🤖 Bot vs Bot",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF38BDF8),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
 
-            Text(
-                "👥 Pass & Play",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-                modifier = Modifier
-                    .background(Color(0xFF333333), RoundedCornerShape(6.dp))
-                    .clickable {
-                        onStateChange(state.copy(whitePlayerId = "", blackPlayerId = ""))
-                    }
-                    .padding(horizontal = 6.dp, vertical = 3.dp)
-            )
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = Color(0xFF334155),
+                modifier = Modifier.clickable {
+                    onStateChange(state.copy(whitePlayerId = myNodeId, blackPlayerId = "bot"))
+                }
+            ) {
+                Text(
+                    "👤 vs 🤖 Human vs Bot",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF34D399),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
+
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = Color(0xFF334155),
+                modifier = Modifier.clickable {
+                    onStateChange(state.copy(whitePlayerId = "", blackPlayerId = ""))
+                }
+            ) {
+                Text(
+                    "👥 Pass & Play",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
         }
 
         // Board
@@ -238,7 +262,12 @@ fun ChessScreen(
                             val pieceStr = state.pieces[idx]
                             
                             val isSelected = selectedIdx == idx
-                            val cellColor = if (isSelected) Color(0xFFFFF59D) else bgColor
+                            val isLastMove = idx == state.lastMoveFrom || idx == state.lastMoveTo
+                            val cellColor = when {
+                                isSelected -> Color(0xFFFFF59D)
+                                isLastMove -> if (isLight) Color(0xFFC8E6C9) else Color(0xFF81C784)
+                                else -> bgColor
+                            }
 
                             Box(
                                 modifier = Modifier

@@ -80,7 +80,7 @@ object AetherFeedManager {
                 mediaType = "image",
                 author = "Offline Nomad",
                 authorHandle = "solar_punk",
-                caption = "Sunset drone footage saved on local storage, now streaming effortlessly to everyone connected to my AetherWeb portal 🌅🏖️",
+                caption = "Sunset drone footage saved on local storage, now streaming effortlessly to everyone connected to my AirChat portal 🌅🏖️",
                 tags = listOf("#solarpunk", "#drone4k", "#meshcommunity"),
                 musicTitle = "Golden Hour Ambient",
                 musicArtist = "Lofi Sunset",

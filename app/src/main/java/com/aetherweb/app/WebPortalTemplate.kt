@@ -51,25 +51,20 @@ object WebPortalTemplate {
                         <p style="margin:0; font-size:12px; color:var(--text-secondary);">Zero-internet multiplayer and casual games powered by local Wi-Fi.</p>
                     </div>
                     <div class="game-selection-grid">
-                        <div class="game-card" onclick="openEmbeddedGame('/tictactoe', '⭕ Tic-Tac-Toe')">
-                            <span class="game-card-icon">⭕</span>
-                            <span class="game-card-title">Tic-Tac-Toe</span>
-                            <span class="game-card-desc">Quick 3x3 strategy</span>
-                        </div>
                         <div class="game-card" onclick="openEmbeddedGame('/chess', '♟️ Chess')">
                             <span class="game-card-icon">♟️</span>
                             <span class="game-card-title">Chess</span>
-                            <span class="game-card-desc">Classic 2-player board</span>
+                            <span class="game-card-desc">AI bot & 2-player board</span>
                         </div>
-                        <div class="game-card" onclick="openEmbeddedGame('/snake', '🐍 Snake')">
-                            <span class="game-card-icon">🐍</span>
-                            <span class="game-card-title">Retro Snake</span>
-                            <span class="game-card-desc">Classic arcade run</span>
+                        <div class="game-card" onclick="openEmbeddedGame('/tictactoe', '⭕ Tic-Tac-Toe')">
+                            <span class="game-card-icon">⭕</span>
+                            <span class="game-card-title">Tic-Tac-Toe</span>
+                            <span class="game-card-desc">Minimax AI & instant rematch</span>
                         </div>
-                        <div class="game-card" onclick="openEmbeddedGame('/pool', '🎱 8-Ball Pool')">
-                            <span class="game-card-icon">🎱</span>
-                            <span class="game-card-title">8-Ball Pool</span>
-                            <span class="game-card-desc">Billiards simulation</span>
+                        <div class="game-card" onclick="switchNavTab('game')">
+                            <span class="game-card-icon">🎲</span>
+                            <span class="game-card-title">Ludo Star</span>
+                            <span class="game-card-desc">4-player live mesh board</span>
                         </div>
                         <div class="game-card" onclick="openEmbeddedGame('/ide', '💻 Web IDE')">
                             <span class="game-card-icon">💻</span>
@@ -844,7 +839,26 @@ object WebPortalTemplate {
                 }
             }
 
-            // 3. Prompt for PIN if neither QR scan nor saved key
+            // 3. Check /api/crypto/info for automatic key exchange in public rooms
+            try {
+                const infoRes = await fetch('/api/crypto/info');
+                if (infoRes.ok) {
+                    const info = await infoRes.json();
+                    if (info.salt) sessionSaltHex = info.salt;
+                    if (!info.isPrivate && info.autoKey) {
+                        const keyBytes = hexToBytes(info.autoKey);
+                        cryptoKey = await importRawAesKey(keyBytes);
+                        activeKeyFingerprint = await computeKeyFingerprint(cryptoKey);
+                        sessionStorage.setItem('aether_e2ee_key', info.autoKey);
+                        updateShieldUi(true, 'Active');
+                        return;
+                    }
+                }
+            } catch(e) {
+                console.warn("Could not fetch crypto info auto-key:", e);
+            }
+
+            // 4. Prompt for PIN if private room or manual key derivation required
             updateShieldUi(false, 'PIN Needed');
             document.getElementById('pin-prompt-modal').style.display = 'flex';
         }
