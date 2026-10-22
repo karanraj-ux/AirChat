@@ -104,20 +104,14 @@ object NetworkUtils {
                 }
             }
 
-            // 3. Look for standard private IP ranges (skip cellular).
-            // Order matters: 192.168.x is almost always WiFi/hotspot;
-            // 10.x is commonly carrier mobile data — check it LAST.
+            // 3. Look for standard private IP ranges (skip cellular interfaces only).
+            // NOTE: 10.x can be a valid hotspot range on some phones — do NOT
+            // deprioritize it. Only rmnet/ccmni/pdp/wwan are definitely mobile data.
             for ((name, ip) in ips) {
                 if (isCellularIface(name)) continue
-                if (ip.startsWith("192.168.")) return ip
-            }
-            for ((name, ip) in ips) {
-                if (isCellularIface(name)) continue
-                if (ip.startsWith("172.")) return ip
-            }
-            for ((name, ip) in ips) {
-                if (isCellularIface(name)) continue
-                if (ip.startsWith("10.")) return ip
+                if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")) {
+                    return ip
+                }
             }
             
             // 4. Any non-cellular
