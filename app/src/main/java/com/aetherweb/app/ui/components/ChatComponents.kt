@@ -555,6 +555,7 @@ fun ChatInput(
     onCameraClick: () -> Unit = {},
     onPollClick: () -> Unit = {},
     onIdeClick: (() -> Unit)? = null,
+    onTruthDareClick: (() -> Unit)? = null,
     onMicClick: () -> Unit,
     onCancelRecording: () -> Unit = onMicClick,
     isRecording: Boolean = false,
@@ -715,6 +716,13 @@ fun ChatInput(
                                     text = { Text("Code IDE") },
                                     leadingIcon = { Icon(Icons.Default.Code, contentDescription = null) },
                                     onClick = { showAttachMenu = false; onIdeClick() }
+                                )
+                            }
+                            if (onTruthDareClick != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Truth / Dare") },
+                                    leadingIcon = { Icon(Icons.Default.Psychology, contentDescription = null) },
+                                    onClick = { showAttachMenu = false; onTruthDareClick() }
                                 )
                             }
                         }
