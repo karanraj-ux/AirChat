@@ -2612,7 +2612,7 @@ fun MainChatScreen(
                                             ) { Text("Copy Pwd") }
                                         }
                                         HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                                        val portalUrl = "http://${uiState.hotspotIp.ifEmpty { "192.168.49.1" }}:8080"
+                                        val portalUrl = "http://${uiState.hotspotIp.ifEmpty { com.aetherweb.app.NetworkUtils.getHotspotIp() ?: com.aetherweb.app.NetworkUtils.getLocalIpAddress() }}:8080"
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -2660,7 +2660,7 @@ fun MainChatScreen(
                                                     putExtra(android.content.Intent.EXTRA_SUBJECT, "Nexus Mesh Wi-Fi Access")
                                                     putExtra(
                                                         android.content.Intent.EXTRA_TEXT,
-                                                        "Nexus Offline Mesh Wi-Fi Connection:\n\n• Network (SSID): ${uiState.hotspotSsid}\n• Password: ${uiState.hotspotPassword}\n• Web Portal: http://${uiState.hotspotIp.ifEmpty { "192.168.49.1" }}:8080\n\nConnect to this Wi-Fi to chat and share files offline!"
+                                                        "Nexus Offline Mesh Wi-Fi Connection:\n\n• Network (SSID): ${uiState.hotspotSsid}\n• Password: ${uiState.hotspotPassword}\n• Web Portal: http://${uiState.hotspotIp.ifEmpty { com.aetherweb.app.NetworkUtils.getHotspotIp() ?: com.aetherweb.app.NetworkUtils.getLocalIpAddress() }}:8080\n\nConnect to this Wi-Fi to chat and share files offline!"
                                                     )
                                                 }
                                                 context.startActivity(android.content.Intent.createChooser(shareIntent, "Share Wi-Fi Credentials"))
