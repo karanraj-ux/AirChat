@@ -21,6 +21,12 @@ object NetworkUtils {
     // Prioritize interface names. Lower index = higher priority.
     private val priorityInterfaces = listOf("ap0", "ap1", "softap0", "swlan0", "wlan1", "wlan0")
 
+    private fun isCellularIface(name: String): Boolean =
+        name.startsWith("rmnet") || name.startsWith("ccmni") ||
+                name.startsWith("pdp") || name.startsWith("cellular") ||
+                name.startsWith("wwan") || name.startsWith("v4-rmnet") ||
+                name.startsWith("v6-rmnet")
+
     fun getAllLocalIps(): Map<String, String> {
         val ips = mutableMapOf<String, String>()
         try {
@@ -71,7 +77,8 @@ object NetworkUtils {
                 return ip
             }
         }
-        for ((_, ip) in ips) {
+        for ((name, ip) in ips) {
+            if (isCellularIface(name)) continue
             if (ip.startsWith("192.168.43.") || ip.startsWith("192.168.49.") || ip.startsWith("192.168.50.")) {
                 return ip
             }
@@ -97,12 +104,20 @@ object NetworkUtils {
                 }
             }
 
-            // 3. Look for standard private IP ranges (skip cellular)
+            // 3. Look for standard private IP ranges (skip cellular).
+            // Order matters: 192.168.x is almost always WiFi/hotspot;
+            // 10.x is commonly carrier mobile data — check it LAST.
             for ((name, ip) in ips) {
-                if (name.startsWith("rmnet") || name.startsWith("ccmni") || name.startsWith("pdp") || name.startsWith("cellular")) continue
-                if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")) {
-                    return ip
-                }
+                if (isCellularIface(name)) continue
+                if (ip.startsWith("192.168.")) return ip
+            }
+            for ((name, ip) in ips) {
+                if (isCellularIface(name)) continue
+                if (ip.startsWith("172.")) return ip
+            }
+            for ((name, ip) in ips) {
+                if (isCellularIface(name)) continue
+                if (ip.startsWith("10.")) return ip
             }
             
             // 4. Any non-cellular
