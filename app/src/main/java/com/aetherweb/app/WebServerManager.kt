@@ -402,6 +402,20 @@ class WebServerManager(
                             call.respondText("Error loading chess: ${e.message}", status = io.ktor.http.HttpStatusCode.InternalServerError)
                         }
                     }
+                    get("/snake") {
+                        try {
+                            call.respondText(com.aetherweb.app.PocketCdnPacks.SNAKE_HTML, io.ktor.http.ContentType.Text.Html)
+                        } catch (e: Exception) {
+                            call.respondText("Error loading game: ${e.message}", status = io.ktor.http.HttpStatusCode.InternalServerError)
+                        }
+                    }
+                    get("/pool") {
+                        try {
+                            call.respondText(com.aetherweb.app.PocketCdnPacks.POOL_GAME_HTML, io.ktor.http.ContentType.Text.Html)
+                        } catch(e: Exception) {
+                            call.respondText("Error loading pool game: ${e.message}", status = io.ktor.http.HttpStatusCode.InternalServerError)
+                        }
+                    }
                     get("/ide") {
                         try {
                             call.respondText(com.aetherweb.app.PocketCdnPacks.WEB_IDE_HTML, io.ktor.http.ContentType.Text.Html)

@@ -184,7 +184,7 @@ abstract class BundleLiteApk : DefaultTask() {
 
     @TaskAction
     fun run() {
-        val out = outputDir.file("aetherweb-lite.apk").get().asFile
+        val out = outputDir.file("airchat-lite.apk").get().asFile
         out.parentFile.mkdirs()
         inputApk.get().asFile.copyTo(out, overwrite = true)
     }
