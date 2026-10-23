@@ -1374,9 +1374,27 @@ class MeshViewModel(application: Application) : AndroidViewModel(application) {
         MeshNetworkManager._uiState.update { it.copy(activeRandomizer = null) }
     }
 
-    fun sendCodeSnippet(language: String, code: String) {
-        val snippetMsg = "💻 Shared a $language code snippet:\n```$language\n$code\n```"
-        sendMessage(snippetMsg)
+    fun sendCodeSnippet(language: String, code: String, toolTitle: String = "AirChat Interactive Tool") {
+        val toolId = java.util.UUID.randomUUID().toString().take(8)
+        val author = MeshNetworkManager._uiState.value.localUserName
+        // Host on local WebServer
+        WebServerManager.sharedHostedTools[toolId] = WebServerManager.HostedTool(
+            id = toolId,
+            title = toolTitle,
+            author = author,
+            language = language,
+            code = code
+        )
+        val toolJson = org.json.JSONObject().apply {
+            put("type", "interactive_tool")
+            put("toolId", toolId)
+            put("title", toolTitle)
+            put("author", author)
+            put("language", language)
+            put("code", code)
+            put("timestamp", System.currentTimeMillis())
+        }.toString()
+        sendMessage(toolJson)
     }
 
     fun startPoll(question: String, options: List<String>, attachmentUri: android.net.Uri? = null) {

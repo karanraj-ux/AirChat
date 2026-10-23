@@ -95,6 +95,8 @@ print("--- Execution Complete ---")
     var consoleLogs by remember { mutableStateOf(listOf<String>()) }
     var outputRenderKey by remember { mutableIntStateOf(0) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var showShareDialog by remember { mutableStateOf(false) }
+    var customToolTitle by remember { mutableStateOf("") }
 
     val currentCode = when (currentLang) {
         "HTML" -> codeHtml
@@ -260,8 +262,8 @@ print("--- Execution Complete ---")
 
                         IconButton(
                             onClick = {
-                                viewModel.sendCodeSnippet(currentLang, currentCode)
-                                Toast.makeText(context, "Code shared to Mesh Chat!", Toast.LENGTH_SHORT).show()
+                                customToolTitle = "AirChat Tool ($currentLang)"
+                                showShareDialog = true
                             },
                             modifier = Modifier.size(36.dp)
                         ) {
@@ -270,6 +272,54 @@ print("--- Execution Complete ---")
                     }
                 }
             }
+        }
+
+        if (showShareDialog) {
+            AlertDialog(
+                onDismissRequest = { showShareDialog = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("⚡", fontSize = 20.sp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Publish Interactive Tool", fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8))
+                    }
+                },
+                text = {
+                    Column {
+                        Text(
+                            "Share this code as a live interactive web mini-app on the local mesh. Connected peers and web browsers can run and use this tool directly!",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF94A3B8)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = customToolTitle,
+                            onValueChange = { customToolTitle = it },
+                            label = { Text("Tool Name / Title") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val title = customToolTitle.trim().ifEmpty { "Mesh Tool ($currentLang)" }
+                            viewModel.sendCodeSnippet(currentLang, currentCode, title)
+                            showShareDialog = false
+                            Toast.makeText(context, "Interactive Tool published to Mesh!", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981))
+                    ) {
+                        Text("Publish Live Tool", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showShareDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
 
         // Main Viewport

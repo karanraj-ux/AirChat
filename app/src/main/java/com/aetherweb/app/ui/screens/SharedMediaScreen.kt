@@ -348,7 +348,7 @@ fun SharedMediaScreen(
                 }
 
                 // Phase 1 Optimization: Floating In-Game PIP Chat Drawer (Non-blocking upper overlay)
-                if (mediaType in listOf("tictactoe", "connect4", "ludo", "chess", "truthdare", "ide", "web")) {
+                if (mediaType in listOf("tictactoe", "ludo", "chess", "ide", "truthdare", "web")) {
                     val vm: com.aetherweb.app.MeshViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
                     val state by vm.uiState.collectAsState()
                     GamePipChatOverlay(

@@ -38,6 +38,8 @@ import kotlinx.coroutines.Dispatchers
 import com.aetherweb.app.*
 import com.aetherweb.app.ui.components.*
 
+data class ActiveToolInfo(val toolId: String, val title: String, val code: String, val lang: String)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainChatScreen(
@@ -2612,7 +2614,7 @@ fun MainChatScreen(
                                             ) { Text("Copy Pwd") }
                                         }
                                         HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                                        val portalUrl = "http://${uiState.hotspotIp.ifEmpty { com.aetherweb.app.NetworkUtils.getHotspotIp() ?: com.aetherweb.app.NetworkUtils.getLocalIpAddress() }}:8080"
+                                        val portalUrl = "http://${uiState.hotspotIp.ifEmpty { "192.168.49.1" }}:8080"
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -2660,7 +2662,7 @@ fun MainChatScreen(
                                                     putExtra(android.content.Intent.EXTRA_SUBJECT, "Nexus Mesh Wi-Fi Access")
                                                     putExtra(
                                                         android.content.Intent.EXTRA_TEXT,
-                                                        "Nexus Offline Mesh Wi-Fi Connection:\n\n• Network (SSID): ${uiState.hotspotSsid}\n• Password: ${uiState.hotspotPassword}\n• Web Portal: http://${uiState.hotspotIp.ifEmpty { com.aetherweb.app.NetworkUtils.getHotspotIp() ?: com.aetherweb.app.NetworkUtils.getLocalIpAddress() }}:8080\n\nConnect to this Wi-Fi to chat and share files offline!"
+                                                        "Nexus Offline Mesh Wi-Fi Connection:\n\n• Network (SSID): ${uiState.hotspotSsid}\n• Password: ${uiState.hotspotPassword}\n• Web Portal: http://${uiState.hotspotIp.ifEmpty { "192.168.49.1" }}:8080\n\nConnect to this Wi-Fi to chat and share files offline!"
                                                     )
                                                 }
                                                 context.startActivity(android.content.Intent.createChooser(shareIntent, "Share Wi-Fi Credentials"))
@@ -3891,6 +3893,7 @@ fun ChatTab(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var fullScreenImageUrl by remember { mutableStateOf<String?>(null) }
+    var activeToolToRun by remember { mutableStateOf<ActiveToolInfo?>(null) }
     
     var isRecording by remember { mutableStateOf(false) }
     val audioRecorder = remember { com.aetherweb.app.AudioRecorderHelper(context) }
@@ -3955,6 +3958,61 @@ fun ChatTab(
                     ) {
                         Icon(Icons.Default.Download, contentDescription = "Save to Gallery", tint = WhatsAppGreen)
                     }
+                }
+            }
+        }
+    }
+
+    if (activeToolToRun != null) {
+        val tool = activeToolToRun!!
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { activeToolToRun = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = Color(0xFF0F172A)
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF1E293B))
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("⚡", fontSize = 18.sp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(tool.title, fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8), fontSize = 15.sp)
+                                Text("Interactive Tool (${tool.lang})", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                            }
+                        }
+                        IconButton(onClick = { activeToolToRun = null }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                        }
+                    }
+                    androidx.compose.ui.viewinterop.AndroidView(
+                        factory = { ctx ->
+                            android.webkit.WebView(ctx).apply {
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.allowFileAccess = false
+                                webViewClient = android.webkit.WebViewClient()
+                                if (tool.lang.equals("HTML", ignoreCase = true)) {
+                                    loadDataWithBaseURL("http://127.0.0.1/", tool.code, "text/html", "UTF-8", null)
+                                } else {
+                                    val consoleHtml = """
+                                        <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>body{background:#0f172a;color:#f8fafc;font-family:monospace;padding:16px;}#log{background:#1e293b;padding:14px;border-radius:10px;white-space:pre-wrap;color:#38bdf8;border:1px solid #334155;}</style></head><body><h3>⚡ ${tool.title}</h3><div id="log">Running script...&#10;</div><script>const el=document.getElementById('log');console.log=(m)=>{el.innerText+=m+'\n';};try{${tool.code};console.log('\n✨ Execution completed.');}catch(e){console.log('\n❌ Error: '+e.message);}</script></body></html>
+                                    """.trimIndent()
+                                    loadDataWithBaseURL("http://127.0.0.1/", consoleHtml, "text/html", "UTF-8", null)
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             }
         }
@@ -4513,6 +4571,9 @@ fun ChatTab(
                         } else {
                             viewModel.downloadAndOpenFile(context, url)
                         }
+                    },
+                    onLaunchTool = { id, title, code, lang ->
+                        activeToolToRun = ActiveToolInfo(id, title, code, lang)
                     }
                 )
                 if (isLastInThread) {
@@ -4759,9 +4820,9 @@ fun ArcadeTab(uiState: MeshState, viewModel: MeshViewModel) {
             BentoGameTile(
                 icon = "🎯",
                 title = "Truth / Dare",
-                subtitle = "Party challenge",
-                badge = "Icebreaker",
-                accentColor = Color(0xFFEAB308),
+                subtitle = "Party Game with Bots",
+                badge = "Multiplayer",
+                accentColor = Color(0xFFF59E0B),
                 modifier = Modifier.weight(1f),
                 onClick = { viewModel.setSharedMedia("truthdare", "", "collaborative", 0) }
             )
@@ -4833,18 +4894,22 @@ fun BentoGameTile(
                         color = accentColor,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Text(
                 title,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = Color.White
+                color = Color.White,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
 
             Spacer(modifier = Modifier.height(2.dp))
@@ -4853,7 +4918,8 @@ fun BentoGameTile(
                 subtitle,
                 fontSize = 11.sp,
                 color = Color(0xFF8696A0),
-                maxLines = 1
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
         }
     }

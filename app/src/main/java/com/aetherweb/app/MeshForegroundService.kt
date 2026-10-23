@@ -496,14 +496,20 @@ object MeshNetworkManager {
                 _uiState.update { state ->
                     val already = state.approvedVoiceGuests.contains(req.ip) ||
                         state.pendingVoiceRequests.any { it.ip == req.ip }
-                    if (already) state else state.copy(
-                        pendingVoiceRequests = state.pendingVoiceRequests + req.copy(request = "voice")
-                    )
+                    if (already) state else {
+                        if (!state.isPrivateRoom) {
+                            state.copy(approvedVoiceGuests = state.approvedVoiceGuests + req.ip)
+                        } else {
+                            state.copy(
+                                pendingVoiceRequests = state.pendingVoiceRequests + req.copy(request = "voice")
+                            )
+                        }
+                    }
                 }
             },
-            isApproved = { ip -> _uiState.value.approvedSpectators.contains(ip) },
+            isApproved = { ip -> !_uiState.value.isPrivateRoom || _uiState.value.approvedSpectators.contains(ip) },
             // Voice Room Phase 3: gate for the /ws-voice SFU.
-            isVoiceApproved = { ip -> _uiState.value.approvedVoiceGuests.contains(ip) },
+            isVoiceApproved = { ip -> !_uiState.value.isPrivateRoom || _uiState.value.approvedVoiceGuests.contains(ip) || _uiState.value.approvedSpectators.contains(ip) },
             isRoomFullOrSealed = { ip ->
                 val s = _uiState.value
                 val currentCount = 1 + s.approvedSpectators.size + s.connectedNodes.size
@@ -696,6 +702,13 @@ class MeshForegroundService : Service() {
         
         scope.launch {
             manager.meshRouter.incomingMessages.collect { networkMessage ->
+                // Drop loopback messages sent by ourselves (already added optimistically to UI and DB)
+                if (networkMessage.senderId == manager.localNodeId || 
+                    networkMessage.senderId == com.aetherweb.app.MeshNetworkManager.localNodeId ||
+                    (networkMessage.senderName.isNotBlank() && networkMessage.senderName == com.aetherweb.app.MeshNetworkManager._uiState.value.localUserName)) {
+                    return@collect
+                }
+
                 DiagnosticLogger.logMeshToWebHop(networkMessage.messageId, networkMessage.senderId, networkMessage.payload)
                 // bitchat parity: presence announces update the peer table — never shown as chat
                 if (com.aetherweb.app.PresenceManager.handleIncomingAnnounce(networkMessage.payload, networkMessage.senderId)) {
@@ -731,9 +744,20 @@ class MeshForegroundService : Service() {
                         isFromMe = false,
                         timestamp = networkMessage.timestamp
                     )
-                    com.aetherweb.app.MeshNetworkManager._uiState.update { it.copy(
-                        messages = it.messages + newChatMessage
-                    ) }
+                    var wasInserted = false
+                    com.aetherweb.app.MeshNetworkManager._uiState.update { current ->
+                        val already = current.messages.any { 
+                            it.id == newChatMessage.id || 
+                            (it.senderId == newChatMessage.senderId && it.message == newChatMessage.message && kotlin.math.abs(it.timestamp - newChatMessage.timestamp) < 4000)
+                        }
+                        if (already) {
+                            current
+                        } else {
+                            wasInserted = true
+                            current.copy(messages = current.messages + newChatMessage)
+                        }
+                    }
+                    if (!wasInserted) return@collect
                     AetherFeedManager.handleIncomingChatMessage(newChatMessage.message, newChatMessage.senderName)
                     val isGhostMode = com.aetherweb.app.MeshNetworkManager._uiState.value.isGhostMode
                     if (!isGhostMode) {

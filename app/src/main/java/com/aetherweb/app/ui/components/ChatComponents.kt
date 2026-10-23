@@ -90,7 +90,8 @@ fun ChatBubble(
     onPinMessage: (() -> Unit)? = null,
     knownUserIds: Map<String, String> = emptyMap(),
     isFirstInThread: Boolean = true,
-    isLastInThread: Boolean = true
+    isLastInThread: Boolean = true,
+    onLaunchTool: ((toolId: String, title: String, code: String, lang: String) -> Unit)? = null
 ) {
     val isSystem = message.senderName == "System" || message.senderId == "System"
     val isFromMe = message.isFromMe
@@ -267,23 +268,85 @@ fun ChatBubble(
                     }
                 }
 
+                val isInteractiveTool = message.message.startsWith("{\"type\":\"interactive_tool\"")
                 val urlRegex = "(http|https)://[^\\s]+".toRegex()
-                val match = urlRegex.find(message.message)
+                val match = if (!isInteractiveTool) urlRegex.find(message.message) else null
                 val textWithoutUrl = if (match != null && message.message.startsWith("Shared a file: ")) {
                     ""
                 } else {
                     message.message
                 }
 
-                // Main Message Content
-                if (textWithoutUrl.isNotEmpty()) {
-                    SelectionContainer {
-                        Text(
-                            text = textWithoutUrl,
-                            color = Color(0xFFE9EDEF),
-                            fontSize = 15.sp,
-                            lineHeight = 20.sp
-                        )
+                if (isInteractiveTool) {
+                    val toolObj = remember(message.message) {
+                        try { org.json.JSONObject(message.message) } catch (e: Exception) { null }
+                    }
+                    if (toolObj != null) {
+                        val toolId = toolObj.optString("toolId", "")
+                        val toolTitle = toolObj.optString("title", "Interactive Web Tool")
+                        val toolAuthor = toolObj.optString("author", "Peer")
+                        val toolLang = toolObj.optString("language", "HTML")
+                        val toolCode = toolObj.optString("code", "")
+
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(Color(0xFF38BDF8).copy(alpha = 0.2f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text("⚡", fontSize = 20.sp)
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            toolTitle,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF38BDF8),
+                                            fontSize = 14.sp
+                                        )
+                                        Text(
+                                            "Interactive $toolLang Tool by $toolAuthor",
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Button(
+                                    onClick = { onLaunchTool?.invoke(toolId, toolTitle, toolCode, toolLang) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Launch Live Tool", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Main Message Content
+                    if (textWithoutUrl.isNotEmpty()) {
+                        SelectionContainer {
+                            Text(
+                                text = textWithoutUrl,
+                                color = Color(0xFFE9EDEF),
+                                fontSize = 15.sp,
+                                lineHeight = 20.sp
+                            )
+                        }
                     }
                 }
 

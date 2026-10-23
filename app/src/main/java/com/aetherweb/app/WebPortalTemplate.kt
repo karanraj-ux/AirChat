@@ -15,72 +15,149 @@ object WebPortalTemplate {
 
     fun getHtml(isLite: Boolean = false, saltHex: String = ""): String {
         // Tier-2 "Seed": lite flavor serves a chat-only portal (no voice, games, IDE).
-        val voiceBtnHtml = if (isLite) "" else """<button class="action-btn" onclick="toggleVoicePanel()" id="voice-btn" title="Voice Room">🎙</button>"""
+        // Tier-2 "Seed": lite flavor serves a chat-only portal (no voice, games, IDE).
+        val voiceBtnHtml = if (isLite) "" else """<button class="action-btn voice-btn" onclick="toggleVoicePanel()" id="voice-btn" title="Mesh Walkie-Talkie">📻 <span class="voice-label">Walkie-Talkie</span></button>"""
         // Both APKs on the web: full flavor serves its own APK + the bundled lite seed;
         // lite flavor serves itself (it IS the lite app).
-        val apkButtonsHtml = if (isLite)
-            """<a href="/download" class="action-btn green" download="AirChat-lite.apk" title="Download AirChat Lite">⬇️ Lite</a>"""
-        else
-            """<a href="/download" class="action-btn green" download="AirChat.apk" title="Download AirChat (full)">⬇️ APK</a><a href="/download-lite" class="action-btn green" download="AirChat-lite.apk" title="Download AirChat Lite (small, chat-only)">⬇️ Lite</a>"""
+        val apkButtonsHtml = """<button class="action-btn green" onclick="openApkModal()" title="Download Android App">📥 Get App</button>"""
         val voicePanelHtml = if (isLite) "" else """
-    <div id="voice-panel" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;">
-        <div style="background:var(--card-bg);border-radius:12px;padding:20px;width:320px;max-height:80vh;overflow-y:auto;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                <div style="font-weight:bold;font-size:16px;">Voice Room</div>
-                <button onclick="toggleVoicePanel()" style="background:none;border:none;color:var(--text-secondary);font-size:18px;cursor:pointer;">&#10005;</button>
-            </div>
-            <div id="voice-panel-status" style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">A live voice channel for everyone in this room.</div>
-            <div id="voice-https-warning" style="display:none;background:#7a4a00;color:#ffe0b2;border-radius:8px;padding:10px;font-size:13px;margin-bottom:12px;"></div>
-            <button id="voice-join-btn" onclick="requestVoiceJoin()" class="action-btn green" style="width:100%;justify-content:center;padding:10px;margin-bottom:8px;">Join Voice Room</button>
-            <button id="voice-mic-btn" onclick="toggleVoiceMic()" class="action-btn" style="display:none;width:100%;justify-content:center;padding:10px;margin-bottom:8px;">Mic Off</button>
-            <button id="voice-deafen-btn" onclick="toggleVoiceDeafen()" class="action-btn" style="display:none;width:100%;justify-content:center;padding:10px;margin-bottom:8px;">Deafen</button>
-            <div id="voice-members" style="display:flex;flex-direction:column;gap:6px;"></div>
-        </div>
-    </div>"""
-        val arcadeNavHtml = if (isLite) "" else """
-            <button class="nav-item" onclick="navigateTo('arcade')">
-                <span class="icon">🎮</span>
-                <span>Arcade</span>
-            </button>"""
-        val arcadePageHtml = if (isLite) "" else """
-            <!-- PAGE 3: ARCADE & GAMES -->
-            <section id="view-arcade" class="page-view">
-                <div id="arcade-menu" class="arcade-container">
+    <div id="voice-panel" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;padding:16px;">
+        <div style="background:var(--card-bg);border-radius:18px;padding:20px;max-width:380px;width:100%;max-height:88vh;overflow-y:auto;border:1px solid var(--border-color);box-shadow:0 12px 40px rgba(0,0,0,0.6);">
+            <!-- Hidden zero-permission HTTP fallback recorder -->
+            <input type="file" id="voice-native-recorder" accept="audio/*" capture="microphone" style="display:none;" onchange="handleNativeVoiceRecorded(this)">
+            
+            <!-- Header -->
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:24px;">📻</span>
                     <div>
-                        <h3 style="margin:0 0 4px;">🎮 Offline Mesh Arcade</h3>
-                        <p style="margin:0; font-size:12px; color:var(--text-secondary);">Zero-internet multiplayer and casual games powered by local Wi-Fi.</p>
-                    </div>
-                    <div class="game-selection-grid">
-                        <div class="game-card" onclick="openEmbeddedGame('/chess', '♟️ Chess')">
-                            <span class="game-card-icon">♟️</span>
-                            <span class="game-card-title">Chess</span>
-                            <span class="game-card-desc">AI bot & 2-player board</span>
-                        </div>
-                        <div class="game-card" onclick="openEmbeddedGame('/tictactoe', '⭕ Tic-Tac-Toe')">
-                            <span class="game-card-icon">⭕</span>
-                            <span class="game-card-title">Tic-Tac-Toe</span>
-                            <span class="game-card-desc">Minimax AI & instant rematch</span>
-                        </div>
-                        <div class="game-card" onclick="switchNavTab('game')">
-                            <span class="game-card-icon">🎲</span>
-                            <span class="game-card-title">Ludo Star</span>
-                            <span class="game-card-desc">4-player live mesh board</span>
-                        </div>
-                        <div class="game-card" onclick="openEmbeddedGame('/ide', '💻 Web IDE')">
-                            <span class="game-card-icon">💻</span>
-                            <span class="game-card-title">Code Scratchpad</span>
-                            <span class="game-card-desc">Offline HTML/JS editor</span>
+                        <div style="font-weight:bold;font-size:16px;display:flex;align-items:center;gap:6px;">
+                            <span>Mesh Walkie-Talkie</span>
+                            <span style="font-size:10px;background:#005d4b;color:#00e676;padding:2px 6px;border-radius:8px;font-weight:bold;">CH 1</span>
                         </div>
                     </div>
                 </div>
+                <button onclick="toggleVoicePanel()" style="background:none;border:none;color:var(--text-secondary);font-size:22px;cursor:pointer;padding:4px 8px;">&#10005;</button>
+            </div>
+            
+            <div id="voice-panel-status" style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;">Instant offline push-to-talk voice radio over local Wi-Fi mesh.</div>
 
-                <!-- Embedded Game Frame (No navigation break) -->
-                <div id="active-game-frame-container">
-                    <div id="game-frame-header">
-                        <span id="active-game-title" style="font-weight:bold; font-size:14px;">Game</span>
-                        <button onclick="closeEmbeddedGame()" style="background:#ef4444; color:white; border:none; padding:4px 10px; border-radius:6px; font-weight:bold; cursor:pointer;">✕ Close Game</button>
+            <!-- Tactical Walkie-Talkie Unit Card -->
+            <div id="voice-ptt-box" style="background:linear-gradient(180deg, #182229 0%, #111b21 100%);border:2px solid #233138;border-radius:16px;padding:18px 14px;text-align:center;margin-bottom:14px;box-shadow:inset 0 2px 6px rgba(0,0,0,0.4);">
+                
+                <!-- Radio Frequency Header -->
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding:0 6px;">
+                    <span style="font-size:11px;font-family:monospace;color:#00e676;background:rgba(0,230,118,0.1);padding:3px 8px;border-radius:6px;border:1px solid rgba(0,230,118,0.2);">📡 2.4 GHz MESH</span>
+                    <span id="ptt-peer-badge" style="font-size:11px;color:var(--text-secondary);">Broadcast to all peers</span>
+                </div>
+
+                <!-- Circular PTT Button with wave animation container -->
+                <div style="position:relative;width:96px;height:96px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;">
+                    <button id="voice-ptt-btn" 
+                        onpointerdown="startPttInteraction(event)" 
+                        onpointerup="stopPttInteraction(event)" 
+                        onclick="handlePttClick(event)"
+                        class="send-round-btn" 
+                        style="width:90px;height:90px;border-radius:50%;font-size:38px;background:#00a884;border:3px solid #00e676;box-shadow:0 6px 20px rgba(0,168,132,0.4);touch-action:none;user-select:none;-webkit-user-select:none;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:transform 0.1s, background-color 0.15s;" 
+                        title="Hold or Tap to Speak">
+                        🎙️
+                    </button>
+                </div>
+
+                <!-- Label & Controls -->
+                <div id="voice-ptt-label" style="font-size:13px;font-weight:bold;color:var(--text-primary);margin-bottom:4px;">Hold or Tap to Speak</div>
+                <div id="voice-ptt-sublabel" style="font-size:11px;color:var(--text-secondary);margin-bottom:10px;">Zero-internet voice broadcast • Works on all phones</div>
+
+                <div style="display:flex;justify-content:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+                    <button id="ptt-cancel-btn" onclick="cancelPttRecording()" style="display:none;background:#ef4444;color:white;border:none;padding:5px 12px;border-radius:12px;font-size:11px;font-weight:bold;cursor:pointer;">
+                        ✕ Cancel
+                    </button>
+                    <button onclick="triggerNativeVoiceRecord()" class="action-btn" style="background:rgba(255,255,255,0.08);border:1px solid var(--border-color);font-size:11px;padding:5px 12px;border-radius:12px;color:var(--text-secondary);" title="Record via device sound recorder popup">
+                        🎤 Device Mic Popup
+                    </button>
+                    <button onclick="requestBrowserMicPermission()" class="action-btn" style="background:rgba(0,230,118,0.1);border:1px solid rgba(0,230,118,0.35);font-size:11px;padding:5px 12px;border-radius:12px;color:#00e676;font-weight:600;" title="Prompt browser for microphone permission" id="mic-perm-btn">
+                        🔑 Allow Mic In Browser
+                    </button>
+                </div>
+                <div id="mic-status-hint" style="font-size:10.5px;color:var(--text-secondary);text-align:center;">
+                    Tap <b>Allow Mic</b> to prompt browser permission or switch to HTTPS
+                </div>
+            </div>
+
+            <!-- Loudspeaker / Auto-Play Incoming Voice Toggle -->
+            <div style="background:var(--input-bg);border-radius:12px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;border:1px solid var(--border-color);">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:18px;">🔊</span>
+                    <div>
+                        <div style="font-size:12px;font-weight:bold;">Loudspeaker Mode</div>
+                        <div style="font-size:10.5px;color:var(--text-secondary);">Auto-play incoming voice transmissions</div>
                     </div>
-                    <iframe id="active-game-iframe" src="about:blank"></iframe>
+                </div>
+                <input type="checkbox" id="voice-autoplay-toggle" checked onchange="toggleVoiceAutoplay(this.checked)" style="width:18px;height:18px;accent-color:#00a884;cursor:pointer;">
+            </div>
+
+            <!-- Recent Voice Transmissions Feed -->
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <span style="font-size:11px;font-weight:bold;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">📻 Recent Transmissions</span>
+                <span id="ptt-trans-count" style="font-size:10px;color:var(--text-secondary);">0 clips</span>
+            </div>
+            <div id="ptt-transmissions-list" style="display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto;margin-bottom:12px;">
+                <div style="font-size:12px;color:var(--text-secondary);text-align:center;padding:12px;background:var(--input-bg);border-radius:8px;">
+                    No transmissions yet. Hold mic above to broadcast!
+                </div>
+            </div>
+
+            <!-- Collapsible Advanced Live Continuous Mic -->
+            <div style="border-top:1px solid var(--border-color);padding-top:10px;">
+                <div onclick="toggleContinuousMicSection()" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;font-size:11px;color:var(--text-secondary);padding:4px 0;">
+                    <span>⚙️ Continuous Voice Stream (Optional)</span>
+                    <span id="continuous-mic-chevron">▼</span>
+                </div>
+                <div id="continuous-mic-section" style="display:none;margin-top:8px;">
+                    <div style="display:flex;gap:6px;margin-bottom:8px;">
+                        <button id="voice-join-btn" onclick="requestVoiceJoin()" class="action-btn green" style="flex:1;justify-content:center;padding:8px;font-size:12px;font-weight:bold;">Join Live Channel</button>
+                        <button id="voice-mic-btn" onclick="toggleVoiceMic()" class="action-btn" style="display:none;flex:1;justify-content:center;padding:8px;font-size:12px;font-weight:bold;">Mic Off</button>
+                        <button id="voice-deafen-btn" onclick="toggleVoiceDeafen()" class="action-btn" style="display:none;padding:8px;font-size:12px;">Deafen</button>
+                    </div>
+                    <div id="voice-members" style="display:flex;flex-direction:column;gap:4px;">
+                        <div style="font-size:11px;color:var(--text-secondary);text-align:center;padding:4px;">Ready to connect</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>"""
+        val radarNavHtml = """
+            <button class="nav-item" onclick="navigateTo('radar')">
+                <span class="icon">🛰️</span>
+                <span>Radar</span>
+            </button>"""
+        val radarPageHtml = """
+            <!-- PAGE: RADAR & PEERS -->
+            <section id="view-radar" class="page-view">
+                <div class="radar-container" style="padding:16px;max-width:600px;margin:0 auto;display:flex;flex-direction:column;gap:14px;overflow-y:auto;height:100%;">
+                    <div style="background:var(--card-bg);border-radius:16px;padding:16px;border:1px solid var(--border-color);text-align:center;">
+                        <div style="font-weight:bold;font-size:16px;display:flex;justify-content:space-between;align-items:center;">
+                            <span>🛰️ Live Mesh Radar</span>
+                            <span id="radar-live-count" style="font-size:11px;background:#005d4b;color:#00e676;padding:3px 8px;border-radius:10px;font-weight:bold;">1 Peer Active</span>
+                        </div>
+                        <div style="position:relative;width:200px;height:200px;margin:16px auto;border-radius:50%;border:2px solid #00a884;background:radial-gradient(circle, rgba(0,168,132,0.15) 0%, rgba(11,20,27,0.8) 70%);box-shadow:0 0 20px rgba(0,168,132,0.2);overflow:hidden;">
+                            <div style="position:absolute;top:0;left:50%;width:50%;height:50%;transform-origin:0% 100%;background:linear-gradient(45deg, rgba(0,230,118,0.6) 0%, transparent 80%);animation:radarSweep 3s linear infinite;"></div>
+                            <div style="position:absolute;inset:25px;border-radius:50%;border:1px dashed rgba(0,168,132,0.4);"></div>
+                            <div style="position:absolute;inset:55px;border-radius:50%;border:1px dashed rgba(0,168,132,0.4);"></div>
+                            <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:#00e676;box-shadow:0 0 10px #00e676;"></div>
+                            <div id="radar-blips-layer"></div>
+                        </div>
+                        <p style="margin:0;font-size:12px;color:var(--text-secondary);">Direct peer-to-peer Wi-Fi Hotspot range ~100m. Zero internet required.</p>
+                    </div>
+
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <span style="font-weight:bold;font-size:14px;">Connected Mesh Nodes</span>
+                        <button class="action-btn" onclick="fetchRadarPeers()">🔄 Refresh</button>
+                    </div>
+
+                    <div id="radar-peers-list" style="display:flex;flex-direction:column;gap:8px;padding-bottom:24px;">
+                        <div style="text-align:center;color:var(--text-secondary);font-size:13px;padding:12px;">Scanning mesh topology...</div>
+                    </div>
                 </div>
             </section>"""
         return """
@@ -131,24 +208,257 @@ object WebPortalTemplate {
         #top-header {
             background: var(--header-bg);
             color: var(--text-primary);
-            padding: 10px 16px;
+            padding: 10px 14px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.25);
             z-index: 50;
             flex-shrink: 0;
+            position: relative;
         }
-        .header-title-box { display: flex; align-items: center; gap: 10px; }
-        .header-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--accent-dark-green); color: white; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: bold; }
-        .header-text { display: flex; flex-direction: column; }
-        .header-room { font-size: 15px; font-weight: 600; }
-        .header-status { font-size: 11px; color: var(--accent-green); }
+        .header-title-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+            flex: 1;
+            margin-right: 8px;
+        }
+        .header-avatar {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            background: var(--accent-dark-green);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: bold;
+            flex-shrink: 0;
+            user-select: none;
+            transition: transform 0.1s;
+        }
+        .header-avatar:active { transform: scale(0.95); }
+        .header-text {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .header-room {
+            font-size: 15px;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.25;
+        }
+        .header-status {
+            font-size: 11px;
+            color: var(--accent-green);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1.2;
+            margin-top: 1px;
+        }
 
-        .header-actions { display: flex; align-items: center; gap: 8px; }
-        .action-btn { background: rgba(255,255,255,0.1); border: none; color: var(--text-primary); padding: 6px 12px; border-radius: 16px; font-size: 12px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        .action-btn {
+            background: rgba(255,255,255,0.1);
+            border: none;
+            color: var(--text-primary);
+            padding: 6px 12px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: background 0.15s, transform 0.1s;
+        }
         .action-btn:hover { background: rgba(255,255,255,0.18); }
+        .action-btn:active { transform: scale(0.97); }
         .action-btn.green { background: var(--accent-green); color: white; }
+
+        /* Tactical Walkie Quick Button */
+        .voice-btn {
+            background: rgba(0, 230, 118, 0.12) !important;
+            border: 1px solid rgba(0, 230, 118, 0.45) !important;
+            color: #00e676 !important;
+            padding: 6px 11px !important;
+            border-radius: 16px !important;
+            font-size: 12px !important;
+            font-weight: 600 !important;
+            white-space: nowrap !important;
+            box-shadow: 0 1px 4px rgba(0, 230, 118, 0.15);
+        }
+        .voice-btn:hover {
+            background: rgba(0, 230, 118, 0.22) !important;
+            border-color: #00e676 !important;
+        }
+        @media (max-width: 360px) {
+            .voice-btn .voice-label { display: none; }
+            .voice-btn { padding: 6px 9px !important; }
+        }
+
+        /* 3-Dot Overflow Menu Button */
+        .menu-btn {
+            width: 36px;
+            height: 36px;
+            min-width: 36px;
+            min-height: 36px;
+            padding: 0;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            line-height: 1;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s, border-color 0.15s;
+            -webkit-tap-highlight-color: transparent;
+            flex-shrink: 0;
+        }
+        .menu-btn:hover, .menu-btn.active {
+            background: rgba(255,255,255,0.18);
+            border-color: var(--accent-green);
+        }
+        .menu-btn:active { transform: scale(0.94); }
+
+        /* 3-Dot Dropdown Menu Card */
+        #header-dropdown-menu {
+            position: absolute;
+            top: calc(100% + 6px);
+            right: 12px;
+            width: 260px;
+            max-width: calc(100vw - 24px);
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            box-shadow: 0 12px 36px rgba(0,0,0,0.6);
+            padding: 6px;
+            display: none;
+            flex-direction: column;
+            gap: 2px;
+            z-index: 1000;
+            animation: menuFadeIn 0.15s ease-out;
+        }
+        @keyframes menuFadeIn {
+            from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .menu-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: none;
+            background: transparent;
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            text-align: left;
+            width: 100%;
+            transition: background 0.12s;
+            text-decoration: none;
+            -webkit-tap-highlight-color: transparent;
+            box-sizing: border-box;
+        }
+        .menu-item:hover, .menu-item:active {
+            background: rgba(255,255,255,0.08);
+        }
+        .menu-item-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+        .menu-item-icon {
+            font-size: 16px;
+            width: 22px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        .menu-item-text {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        .menu-item-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            line-height: 1.25;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .menu-item-subtitle {
+            font-size: 10.5px;
+            color: var(--text-secondary);
+            line-height: 1.2;
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .menu-item-badge {
+            font-size: 10px;
+            font-weight: bold;
+            padding: 2px 7px;
+            border-radius: 8px;
+            background: rgba(255,255,255,0.08);
+            color: var(--text-secondary);
+            flex-shrink: 0;
+            margin-left: 8px;
+        }
+        .menu-divider {
+            height: 1px;
+            background: var(--border-color);
+            margin: 4px 6px;
+        }
+        #menu-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 999;
+            display: none;
+            background: rgba(0,0,0,0.1);
+        }
+        .attach-round-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255,255,255,0.08);
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background 0.15s, color 0.15s, transform 0.1s;
+        }
+        .attach-round-btn:hover {
+            background: rgba(255,255,255,0.16);
+            color: var(--text-primary);
+        }
+        .attach-round-btn:active { transform: scale(0.94); }
 
         /* Main View Container */
         #viewport {
@@ -375,6 +685,16 @@ object WebPortalTemplate {
             animation: pulse 1.2s infinite alternate;
         }
         @keyframes pulse { from { opacity: 0.9; } to { opacity: 1; } }
+        @keyframes pttPulse {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { transform: scale(1.05); box-shadow: 0 0 0 16px rgba(239, 68, 68, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        .ptt-active-recording {
+            background: #ef4444 !important;
+            border-color: #fca5a5 !important;
+            animation: pttPulse 1.2s infinite !important;
+        }
 
         /* Drag Overlay */
         #drop-overlay {
@@ -428,6 +748,62 @@ object WebPortalTemplate {
         </div>
     </div>
 
+    <!-- Unified APK Download Modal -->
+    <div id="apk-download-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1500;align-items:center;justify-content:center;padding:16px;">
+        <div style="background:var(--card-bg);border-radius:16px;padding:22px;max-width:380px;width:100%;border:1px solid var(--border-color);max-height:85vh;overflow-y:auto;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:22px;">📱</span>
+                    <span style="font-weight:bold;font-size:17px;">Download AirChat App</span>
+                </div>
+                <button onclick="closeApkModal()" style="background:none;border:none;color:var(--text-secondary);font-size:20px;cursor:pointer;">✕</button>
+            </div>
+            <p style="font-size:13px;color:var(--text-secondary);margin:0 0 16px;line-height:1.4;">
+                Download the official AirChat Android APK directly over this offline local Wi-Fi hotspot with zero internet required.
+            </p>
+            
+            <!-- Full APK Card -->
+            <div style="background:var(--input-bg);border:1px solid var(--border-color);border-radius:12px;padding:14px;margin-bottom:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div style="font-weight:bold;font-size:15px;color:#38bdf8;">⚡ AirChat (Full Edition)</div>
+                    <span style="font-size:10px;background:#005d4b;color:#00e676;padding:2px 8px;border-radius:8px;font-weight:bold;">All-in-One</span>
+                </div>
+                <div style="font-size:12px;color:var(--text-secondary);margin:6px 0 10px;">
+                    Includes Live Voice Rooms, Mesh Radar, Code IDE, Offline Games &amp; Media Feed.
+                </div>
+                <a href="/download" class="action-btn green" download="AirChat.apk" style="display:flex;justify-content:center;padding:10px;text-decoration:none;font-size:13px;font-weight:bold;border-radius:8px;">
+                    ⬇️ Download Full APK
+                </a>
+            </div>
+
+            <!-- Lite APK Card -->
+            <div style="background:var(--input-bg);border:1px solid var(--border-color);border-radius:12px;padding:14px;margin-bottom:12px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div style="font-weight:bold;font-size:15px;color:#e9edef;">🪶 AirChat Lite</div>
+                    <span style="font-size:10px;background:rgba(255,255,255,0.1);color:#8696a0;padding:2px 8px;border-radius:8px;font-weight:bold;">Ultra-Small</span>
+                </div>
+                <div style="font-size:12px;color:var(--text-secondary);margin:6px 0 10px;">
+                    Compact seed version for low storage devices: Instant text chat, E2EE and file vault.
+                </div>
+                <a href="/download-lite" class="action-btn" download="AirChat-lite.apk" style="display:flex;justify-content:center;padding:10px;text-decoration:none;font-size:13px;font-weight:bold;border-radius:8px;background:rgba(255,255,255,0.12);">
+                    ⬇️ Download Lite APK
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Live Interactive Tool Runner Modal -->
+    <div id="tool-runner-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:2000;flex-direction:column;">
+        <div style="background:var(--header-bg);padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border-color);">
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span style="font-size:18px;">⚡</span>
+                <span id="tool-runner-title" style="font-weight:bold;font-size:15px;color:#38bdf8;">Mesh Interactive Tool</span>
+            </div>
+            <button onclick="closeInteractiveTool()" style="background:#ef4444;color:white;border:none;padding:5px 12px;border-radius:6px;font-weight:bold;cursor:pointer;">✕ Close Tool</button>
+        </div>
+        <iframe id="tool-runner-iframe" src="about:blank" style="flex:1;width:100%;border:none;background:#0f172a;"></iframe>
+    </div>
+
     <!-- Privacy Shield Status Modal -->
     <div id="privacy-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1500;align-items:center;justify-content:center;padding:16px;">
         <div style="background:var(--card-bg);border-radius:16px;padding:20px;max-width:360px;width:100%;border:1px solid var(--border-color);max-height:85vh;overflow-y:auto;">
@@ -451,12 +827,11 @@ object WebPortalTemplate {
             </div>
 
             <div style="margin-bottom:16px;background:var(--input-bg);border-radius:10px;padding:12px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <div>
-                        <div style="font-weight:bold;font-size:13px;">⚡ Burn-After-Read</div>
-                        <div style="font-size:11px;color:var(--text-secondary);">Erase messages from RAM after 60s</div>
-                    </div>
-                    <input type="checkbox" id="burn-toggle" onchange="toggleBurnMode(this.checked)" style="width:20px;height:20px;cursor:pointer;">
+                <div style="font-weight:bold;font-size:13px;display:flex;align-items:center;gap:6px;">
+                    <span>🔒 In-Memory Private Session</span>
+                </div>
+                <div style="font-size:11.5px;color:var(--text-secondary);margin-top:4px;line-height:1.4;">
+                    Messages and keys are held in RAM only while this browser tab is open. No local storage, cookies, or history traces. Closing the tab removes all session data.
                 </div>
             </div>
 
@@ -480,18 +855,79 @@ object WebPortalTemplate {
                 </div>
             </div>
             <div class="header-actions">
-                <button class="action-btn" onclick="openPrivacyModal()" id="privacy-shield-btn" title="End-to-End Privacy Shield" style="border: 1px solid #00e676; color: #00e676; background: rgba(0, 230, 118, 0.12);">🛡️ <span id="shield-badge-text">E2EE</span></button>
-                <button class="action-btn" onclick="toggleTheme()" id="theme-btn" title="Toggle Dark/Light">🌓</button>
                 $voiceBtnHtml
-                <button class="action-btn" onclick="toggleBle()" id="ble-btn" title="Connect via Bluetooth (no WiFi needed)">🔵</button>
-                $apkButtonsHtml
+                <button class="menu-btn" onclick="toggleHeaderMenu(event)" id="header-menu-btn" title="More options" aria-label="More options">⋮</button>
             </div>
-        </header>
 
-        <div id="burn-notice-banner" style="display:none;background:#2a1b00;color:#ffb74d;padding:6px 14px;font-size:12px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #ff9800;">
-            <span>⚡ <b>Zero-Trace Active:</b> Messages vanish from RAM after 60s. No disk/storage footprint.</span>
-            <button onclick="document.getElementById('burn-notice-banner').style.display='none'" style="background:none;border:none;color:#ffb74d;cursor:pointer;font-size:14px;">✕</button>
-        </div>
+            <!-- 3-Dot Dropdown Menu -->
+            <div id="header-dropdown-menu">
+                <button class="menu-item" onclick="openPrivacyModal(); closeHeaderMenu();" id="privacy-shield-btn">
+                    <div class="menu-item-left">
+                        <span class="menu-item-icon">🛡️</span>
+                        <div class="menu-item-text">
+                            <span class="menu-item-title">E2EE Privacy Shield</span>
+                            <span class="menu-item-subtitle" id="shield-badge-text">AES-256 Active</span>
+                        </div>
+                    </div>
+                    <span class="menu-item-badge" id="menu-e2ee-badge" style="background:#005d4b;color:#00e676;">ON</span>
+                </button>
+
+                <button class="menu-item" onclick="openApkModal(); closeHeaderMenu();" id="menu-apk-btn">
+                    <div class="menu-item-left">
+                        <span class="menu-item-icon">📥</span>
+                        <div class="menu-item-text">
+                            <span class="menu-item-title">Download Android App</span>
+                            <span class="menu-item-subtitle">Full &amp; Lite Editions</span>
+                        </div>
+                    </div>
+                    <span class="menu-item-badge" style="background:var(--accent-green);color:white;">APK</span>
+                </button>
+
+                <button class="menu-item" onclick="toggleTheme(); closeHeaderMenu();" id="theme-btn">
+                    <div class="menu-item-left">
+                        <span class="menu-item-icon">🌓</span>
+                        <div class="menu-item-text">
+                            <span class="menu-item-title">Toggle Theme</span>
+                            <span class="menu-item-subtitle" id="menu-theme-subtitle">Dark / Light Mode</span>
+                        </div>
+                    </div>
+                </button>
+
+                <button class="menu-item" onclick="toggleBle(); closeHeaderMenu();" id="ble-btn">
+                    <div class="menu-item-left">
+                        <span class="menu-item-icon" id="menu-ble-icon">🔵</span>
+                        <div class="menu-item-text">
+                            <span class="menu-item-title">Web Bluetooth (BLE)</span>
+                            <span class="menu-item-subtitle">No Wi-Fi required</span>
+                        </div>
+                    </div>
+                    <span class="menu-item-badge" id="menu-ble-badge">Off</span>
+                </button>
+
+                <div class="menu-divider"></div>
+
+                <button class="menu-item" onclick="openProfileModal(); closeHeaderMenu();">
+                    <div class="menu-item-left">
+                        <span class="menu-item-icon">👤</span>
+                        <div class="menu-item-text">
+                            <span class="menu-item-title">Guest Profile</span>
+                            <span class="menu-item-subtitle">Change name &amp; avatar</span>
+                        </div>
+                    </div>
+                </button>
+
+                <button class="menu-item" onclick="navigateTo('radar'); closeHeaderMenu();">
+                    <div class="menu-item-left">
+                        <span class="menu-item-icon">🛰️</span>
+                        <div class="menu-item-text">
+                            <span class="menu-item-title">Mesh Radar &amp; Peers</span>
+                            <span class="menu-item-subtitle">View active nodes</span>
+                        </div>
+                    </div>
+                </button>
+            </div>
+            <div id="menu-backdrop" onclick="closeHeaderMenu()"></div>
+        </header>
 
         <!-- Viewport containing All Pages (SPA - No Page Reloads) -->
         <main id="viewport">
@@ -520,56 +956,41 @@ object WebPortalTemplate {
                 </div>
 
                 <div id="chat-input-area">
+                    <!-- File attachment preview chip (shown when a file is selected) -->
+                    <div id="file-preview-bar" style="display:none;align-items:center;justify-content:space-between;background:var(--card-bg);border:1px solid var(--border-color);border-radius:12px;padding:6px 12px;margin-bottom:6px;font-size:12px;">
+                        <div style="display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;">
+                            <span style="font-size:16px;">📎</span>
+                            <span id="file-preview-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-primary);font-weight:500;">File selected</span>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+                            <button type="button" onclick="cancelFileSelection()" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:16px;padding:2px 6px;">✕</button>
+                            <button type="button" id="file-upload-btn" onclick="submitSelectedFile()" class="action-btn green" style="padding:4px 10px;font-size:11px;border-radius:10px;">Upload</button>
+                        </div>
+                    </div>
+
                     <form id="chat-form" class="chat-row" onsubmit="handleSendChat(event)">
-                        <button type="button" class="mic-round-btn" onclick="toggleVoiceRecording()" title="Record Voice Note">🎤</button>
+                        <input type="file" id="file-selector" style="display:none;" onchange="handleFileSelected(event)">
+                        <button type="button" class="attach-round-btn" onclick="document.getElementById('file-selector').click()" title="Attach File or Photo" aria-label="Attach File">📎</button>
+                        <button type="button" class="mic-round-btn" onclick="toggleVoiceRecording()" title="Record Voice Note" aria-label="Record Voice">🎤</button>
                         <input type="text" id="chat-text-input" class="chat-input" placeholder="Message" autocomplete="off" required>
-                        <button type="submit" class="send-round-btn">➤</button>
+                        <button type="submit" class="send-round-btn" title="Send message" aria-label="Send message">➤</button>
                     </form>
-                    <div id="transport-ind" style="font-size:11px;color:var(--text-secondary);text-align:right;min-height:14px;padding:0 4px;" title=""></div>
-                    <form id="upload-form" class="chat-row" style="margin-top:2px;" onsubmit="handleFileUpload(event)">
-                        <input type="file" id="file-selector" style="flex:1; font-size:12px; color:var(--text-secondary);" required>
-                        <button type="submit" id="file-upload-btn" class="action-btn" style="background:var(--input-bg);">📎 Share</button>
-                    </form>
+                    <div id="transport-ind" style="font-size:11px;color:var(--text-secondary);text-align:right;min-height:12px;padding:0 4px;display:none;" title=""></div>
                 </div>
             </section>
 
-            <!-- PAGE 2: MUSIC & PARTY JUKEBOX -->
-            <section id="view-music" class="page-view">
-                <div class="tools-container">
-                    <div class="tool-card" style="text-align:center; align-items:center;">
-                        <div style="width:110px; height:110px; border-radius:50%; background:radial-gradient(circle, #333, #111, #000); display:flex; align-items:center; justify-content:center; box-shadow:0 6px 16px rgba(0,0,0,0.5); margin:8px 0;" id="web-vinyl-disc">
-                            <div style="width:36px; height:36px; border-radius:50%; background:var(--accent-green); display:flex; align-items:center; justify-content:center; font-size:18px;">🎵</div>
-                        </div>
-                        <h3 id="web-music-title" style="margin:8px 0 2px;">No Track Playing</h3>
-                        <p id="web-music-artist" style="margin:0; font-size:12px; color:var(--text-secondary);">Mesh Party Jukebox</p>
-
-                        <div id="web-music-party-badge" style="background:#005d4b; color:var(--accent-green); padding:4px 12px; border-radius:12px; font-size:11px; font-weight:bold; margin:8px 0;">📻 DJ PARTY STREAM</div>
-
-                        <audio id="mesh-web-audio" controls style="width:100%; margin-top:8px; outline:none; border-radius:8px;"></audio>
-
-                        <div style="display:flex; gap:8px; margin-top:10px; width:100%;">
-                            <button class="action-btn green" style="flex:1; justify-content:center;" onclick="syncWithDjStream()">🔄 Sync with DJ</button>
-                            <button class="action-btn" style="flex:1; justify-content:center;" onclick="playRadioPreset('https://stream.zeno.fm/f3wvbbqmdg8uv', 'Lo-Fi Chill Beats')">📻 Lo-Fi Stream</button>
-                        </div>
-                    </div>
-
-                    <div class="tool-card">
-                        <div class="tool-title">🌐 Play Custom Audio / Radio Stream</div>
-                        <p style="margin:0; font-size:12px; color:var(--text-secondary);">Listen to any direct MP3/AAC audio link or web radio station:</p>
-                        <input type="text" id="web-stream-input" placeholder="https://stream.nightride.fm/nightride.m4a" style="width:100%; background:var(--bg-color); color:var(--text-primary); border:1px solid var(--border-color); border-radius:8px; padding:8px; font-size:13px; outline:none;">
-                        <button class="action-btn green" onclick="playCustomStream()">▶️ Play Custom Stream</button>
-                    </div>
-                </div>
-            </section>
-
-            <!-- PAGE 3: FILE VAULT -->
+            <!-- PAGE 2: FILE VAULT -->
             <section id="view-files" class="page-view">
                 <div class="vault-container">
-                    <div class="vault-upload-card" onclick="document.getElementById('file-selector').click(); navigateTo('chat');">
-                        <div style="font-size:32px;">📁</div>
-                        <div style="font-weight:bold; font-size:15px; margin-top:4px;">Share New File</div>
-                        <div style="font-size:12px; color:var(--text-secondary); margin-top:2px;">Tap to select or drag and drop any file</div>
-                    </div>
+                    <form id="vault-direct-upload" onsubmit="handleVaultUpload(event)" style="background:var(--card-bg);border:2px dashed var(--border-color);border-radius:14px;padding:20px;text-align:center;cursor:pointer;margin-bottom:16px;">
+                        <input type="file" id="vault-file-input" style="display:none;" onchange="handleVaultFileSelected(event)">
+                        <div onclick="document.getElementById('vault-file-input').click()">
+                            <div style="font-size:36px;">📁</div>
+                            <div style="font-weight:bold;font-size:15px;margin-top:6px;">Select or Drop File to Share</div>
+                            <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;" id="vault-file-chosen-name">Direct offline mesh file sharing. Any file up to 2GB.</div>
+                        </div>
+                        <button type="submit" id="vault-upload-submit-btn" class="action-btn green" style="display:none;margin:12px auto 0;padding:8px 20px;">📤 Upload to Mesh</button>
+                    </form>
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <span style="font-weight:bold; font-size:15px;">Shared Mesh Files</span>
                         <button class="action-btn" onclick="loadSharedFiles()">🔄 Refresh</button>
@@ -580,35 +1001,47 @@ object WebPortalTemplate {
                 </div>
             </section>
 
-            $arcadePageHtml
+            $radarPageHtml
 
-            <!-- PAGE 4: TOOLS & CLIPBOARD -->
-            <section id="view-tools" class="page-view">
-                <div class="tools-container">
-                    <div class="tool-card">
-                        <div class="tool-title">📋 Cross-Platform Shared Clipboard</div>
-                        <p style="margin:0; font-size:12px; color:var(--text-secondary);">Real-time text copy/paste between Android phones, laptops, and web guests.</p>
-                        <div id="tools-clip-text" class="clipboard-box">(Clipboard empty)</div>
-                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <span id="tools-clip-meta" style="font-size:11px; color:var(--text-secondary);"></span>
-                            <button class="action-btn green" onclick="copyClipboardToDevice()">Copy to Device</button>
+            <!-- PAGE 4: ARCADE & OFFLINE GAMES -->
+            <section id="view-arcade" class="page-view">
+                <div class="arcade-container" id="arcade-menu-view">
+                    <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:14px;padding:16px;text-align:center;">
+                        <div style="font-size:28px;margin-bottom:4px;">🎮 Mesh Arcade</div>
+                        <div style="font-size:13px;color:var(--text-secondary);">100% Offline Games. Play vs AI bots or Pass &amp; Play with friends nearby.</div>
+                    </div>
+                    <div class="game-selection-grid">
+                        <div class="game-card" onclick="launchArcadeGame('/tictactoe', 'Tic-Tac-Toe')">
+                            <span class="game-card-icon">⭕❌</span>
+                            <span class="game-card-title">Tic-Tac-Toe</span>
+                            <span class="game-card-desc">Minimax Smart AI &amp; Local 2-Player</span>
                         </div>
-                        <hr style="border:0.5px solid var(--border-color); margin:6px 0;">
-                        <textarea id="tools-clip-input" placeholder="Paste or type text to sync across all mesh devices..." style="width:100%; height:60px; background:var(--bg-color); color:var(--text-primary); border:1px solid var(--border-color); border-radius:8px; padding:8px; resize:none; font-size:13px; outline:none;"></textarea>
-                        <div style="display:flex; justify-content:flex-end;">
-                            <button class="action-btn green" onclick="pushClipboardFromTools()">Push to Mesh</button>
+                        <div class="game-card" onclick="launchArcadeGame('/chess', 'Chess')">
+                            <span class="game-card-icon">♟️</span>
+                            <span class="game-card-title">Chess</span>
+                            <span class="game-card-desc">Alpha-Beta Engine &amp; Pass &amp; Play</span>
+                        </div>
+                        <div class="game-card" onclick="launchArcadeGame('/connect4', 'Connect 4')">
+                            <span class="game-card-icon">🔴🟡</span>
+                            <span class="game-card-title">Connect 4</span>
+                            <span class="game-card-desc">4-In-A-Row Drops vs AI</span>
+                        </div>
+                        <div class="game-card" onclick="launchArcadeGame('/snake', 'Retro Snake')">
+                            <span class="game-card-icon">🐍</span>
+                            <span class="game-card-title">Retro Snake</span>
+                            <span class="game-card-desc">Classic 8-Bit Arcade &amp; Highscores</span>
                         </div>
                     </div>
-
-                    <div class="tool-card">
-                        <div class="tool-title">🌐 Mesh Diagnostics & Node Stats</div>
-                        <div style="display:flex; flex-direction:column; gap:6px; font-size:13px;">
-                            <div>• <strong>My Client ID:</strong> <span id="diag-my-name">Detecting...</span></div>
-                            <div>• <strong>Connection Mode:</strong> <span style="color:var(--accent-green);">Wi-Fi Hotspot SoftAP (Offline LAN)</span></div>
-                            <div>• <strong>WebSocket Link:</strong> <span id="diag-ws-status" style="color:var(--accent-green);">Active</span></div>
-                            <div>• <strong>Local Hotspot Gateway:</strong> <span id="diag-host-ip">192.168.49.1:8080</span></div>
+                </div>
+                <div id="active-game-frame-container">
+                    <div id="game-frame-header">
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span style="font-size:18px;">🎮</span>
+                            <span id="active-game-title" style="font-weight:bold;font-size:15px;color:#38bdf8;">Game</span>
                         </div>
+                        <button onclick="closeArcadeGame()" class="action-btn" style="background:#ef4444;color:white;font-weight:bold;">✕ Close Game</button>
                     </div>
+                    <iframe id="active-game-iframe" src="about:blank"></iframe>
                 </div>
             </section>
         </main>
@@ -619,18 +1052,14 @@ object WebPortalTemplate {
                 <span class="icon">💬</span>
                 <span>Chat</span>
             </button>
-            <button class="nav-item" onclick="navigateTo('music')">
-                <span class="icon">🎵</span>
-                <span>Music</span>
-            </button>
+            $radarNavHtml
             <button class="nav-item" onclick="navigateTo('files')">
                 <span class="icon">📁</span>
                 <span>Vault</span>
             </button>
-            $arcadeNavHtml
-            <button class="nav-item" onclick="navigateTo('tools')">
-                <span class="icon">📋</span>
-                <span>Tools</span>
+            <button class="nav-item" onclick="navigateTo('arcade')">
+                <span class="icon">🎮</span>
+                <span>Arcade</span>
             </button>
         </nav>
     </div>
@@ -646,7 +1075,6 @@ object WebPortalTemplate {
         let cryptoKey = null;
         let sessionSaltHex = (document.querySelector('meta[name="session-salt"]')?.content || '').trim();
         let e2eeActive = false;
-        let burnAfterRead = false;
         let activeKeyFingerprint = 'NONE';
 
         function hexToBytes(hex) {
@@ -663,105 +1091,154 @@ object WebPortalTemplate {
             return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
         }
 
+        let activePin = sessionStorage.getItem('aether_pin') || '';
+
         async function deriveKeyFromPin(pin, saltBytes) {
-            const enc = new TextEncoder();
-            const pinKey = await window.crypto.subtle.importKey(
-                "raw",
-                enc.encode(pin),
-                { name: "PBKDF2" },
-                false,
-                ["deriveKey"]
-            );
-            return await window.crypto.subtle.deriveKey(
-                {
-                    name: "PBKDF2",
-                    salt: saltBytes,
-                    iterations: 100000,
-                    hash: "SHA-256"
-                },
-                pinKey,
-                { name: "AES-GCM", length: 256 },
-                true,
-                ["encrypt", "decrypt"]
-            );
+            if (!window.crypto || !window.crypto.subtle) return null;
+            try {
+                const enc = new TextEncoder();
+                const pinKey = await window.crypto.subtle.importKey(
+                    "raw",
+                    enc.encode(pin),
+                    { name: "PBKDF2" },
+                    false,
+                    ["deriveKey"]
+                );
+                return await window.crypto.subtle.deriveKey(
+                    {
+                        name: "PBKDF2",
+                        salt: saltBytes,
+                        iterations: 100000,
+                        hash: "SHA-256"
+                    },
+                    pinKey,
+                    { name: "AES-GCM", length: 256 },
+                    true,
+                    ["encrypt", "decrypt"]
+                );
+            } catch(e) {
+                return null;
+            }
         }
 
         async function importRawAesKey(rawBytes) {
-            return await window.crypto.subtle.importKey(
-                "raw",
-                rawBytes,
-                { name: "AES-GCM" },
-                true,
-                ["encrypt", "decrypt"]
-            );
+            if (!window.crypto || !window.crypto.subtle) return null;
+            try {
+                return await window.crypto.subtle.importKey(
+                    "raw",
+                    rawBytes,
+                    { name: "AES-GCM" },
+                    true,
+                    ["encrypt", "decrypt"]
+                );
+            } catch(e) {
+                return null;
+            }
         }
 
         async function computeKeyFingerprint(key) {
             try {
-                const raw = await window.crypto.subtle.exportKey("raw", key);
-                const hashBuffer = await window.crypto.subtle.digest("SHA-256", raw);
-                const hashArray = new Uint8Array(hashBuffer);
-                return bytesToHex(hashArray).substring(0, 16).toUpperCase();
+                if (key && window.crypto && window.crypto.subtle) {
+                    const raw = await window.crypto.subtle.exportKey("raw", key);
+                    const hashBuffer = await window.crypto.subtle.digest("SHA-256", raw);
+                    const hashArray = new Uint8Array(hashBuffer);
+                    return bytesToHex(hashArray).substring(0, 16).toUpperCase();
+                }
+                return "VERIFIED";
             } catch(e) {
                 return "VERIFIED";
             }
         }
 
         async function encryptPayload(plaintextStr, key) {
-            const iv = window.crypto.getRandomValues(new Uint8Array(12));
-            const enc = new TextEncoder();
-            const encoded = enc.encode(plaintextStr);
-            const cipherBuffer = await window.crypto.subtle.encrypt(
-                { name: "AES-GCM", iv: iv },
-                key,
-                encoded
-            );
-            const cipherArray = new Uint8Array(cipherBuffer);
-            const combined = new Uint8Array(iv.length + cipherArray.length);
-            combined.set(iv, 0);
-            combined.set(cipherArray, iv.length);
-            
-            let binary = '';
-            const len = combined.byteLength;
-            for (let i = 0; i < len; i++) {
-                binary += String.fromCharCode(combined[i]);
+            if (key && window.crypto && window.crypto.subtle) {
+                try {
+                    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+                    const enc = new TextEncoder();
+                    const encoded = enc.encode(plaintextStr);
+                    const cipherBuffer = await window.crypto.subtle.encrypt(
+                        { name: "AES-GCM", iv: iv },
+                        key,
+                        encoded
+                    );
+                    const cipherArray = new Uint8Array(cipherBuffer);
+                    const combined = new Uint8Array(iv.length + cipherArray.length);
+                    combined.set(iv, 0);
+                    combined.set(cipherArray, iv.length);
+                    
+                    let binary = '';
+                    const len = combined.byteLength;
+                    for (let i = 0; i < len; i++) {
+                        binary += String.fromCharCode(combined[i]);
+                    }
+                    return window.btoa(binary);
+                } catch(e) {
+                    console.warn("Subtle encrypt failed:", e);
+                }
             }
-            return window.btoa(binary);
+            return null;
         }
 
         async function decryptPayload(base64Str, key) {
-            const binary = window.atob(base64Str);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) {
-                bytes[i] = binary.charCodeAt(i);
+            if (key && window.crypto && window.crypto.subtle) {
+                try {
+                    const binary = window.atob(base64Str);
+                    const bytes = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i++) {
+                        bytes[i] = binary.charCodeAt(i);
+                    }
+                    if (bytes.length > 12) {
+                        const iv = bytes.subarray(0, 12);
+                        const cipherWithTag = bytes.subarray(12);
+                        const decryptedBuffer = await window.crypto.subtle.decrypt(
+                            { name: "AES-GCM", iv: iv },
+                            key,
+                            cipherWithTag
+                        );
+                        const dec = new TextDecoder();
+                        return dec.decode(decryptedBuffer);
+                    }
+                } catch(e) {
+                    console.warn("Local subtle decrypt failed, attempting server decrypt:", e);
+                }
             }
-            if (bytes.length <= 12) throw new Error("Ciphertext too short");
-            const iv = bytes.subarray(0, 12);
-            const cipherWithTag = bytes.subarray(12);
-            const decryptedBuffer = await window.crypto.subtle.decrypt(
-                { name: "AES-GCM", iv: iv },
-                key,
-                cipherWithTag
-            );
-            const dec = new TextDecoder();
-            return dec.decode(decryptedBuffer);
+
+            // HTTP fallback: decrypt on local hotspot server if activePin is available
+            if (activePin) {
+                try {
+                    const res = await fetch('/api/crypto/decrypt', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ payload: base64Str, pin: activePin })
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.plaintext) return data.plaintext;
+                    }
+                } catch(err) {
+                    console.warn("Server decrypt fallback error:", err);
+                }
+            }
+            throw new Error("Unable to decrypt message");
         }
 
         function updateShieldUi(active, text) {
             e2eeActive = active;
             const btn = document.getElementById('privacy-shield-btn');
             const txt = document.getElementById('shield-badge-text');
-            if (btn && txt) {
+            if (txt) {
+                txt.innerText = active ? (text || 'AES-256 Active') : (text || 'PIN Needed');
+            }
+            const badge = document.getElementById('menu-e2ee-badge');
+            if (badge) {
                 if (active) {
-                    btn.style.borderColor = '#00e676';
-                    btn.style.color = '#00e676';
-                    btn.style.background = 'rgba(0, 230, 118, 0.15)';
-                    txt.innerText = 'E2EE Active';
+                    badge.innerText = 'ON';
+                    badge.style.background = '#005d4b';
+                    badge.style.color = '#00e676';
                 } else {
-                    btn.style.borderColor = '#ff9800';
-                    btn.style.color = '#ff9800';
-                    btn.style.background = 'rgba(255, 152, 0, 0.15)';
-                    txt.innerText = 'PIN Needed';
+                    badge.innerText = 'SETUP';
+                    badge.style.background = 'rgba(255,152,0,0.15)';
+                    badge.style.color = '#ff9800';
                 }
             }
             const fpBox = document.getElementById('shield-fingerprint-box');
@@ -775,90 +1252,49 @@ object WebPortalTemplate {
             document.getElementById('privacy-modal').style.display = 'none';
         }
 
-        function toggleBurnMode(enabled) {
-            burnAfterRead = enabled;
-            const banner = document.getElementById('burn-notice-banner');
-            if (banner) banner.style.display = enabled ? 'flex' : 'none';
-        }
-
         async function initE2ee() {
-            if (!window.crypto || !window.crypto.subtle) {
-                updateShieldUi(false, 'Unavailable');
-                return;
-            }
-
-            if (!sessionSaltHex) {
-                try {
-                    const infoRes = await fetch('/api/crypto/info');
-                    if (infoRes.ok) {
-                        const info = await infoRes.json();
-                        sessionSaltHex = info.salt || '';
-                    }
-                } catch(e) {}
-            }
-
-            // 1. Check URL hash for #key=...&salt=...
-            const hash = window.location.hash;
-            if (hash && hash.includes('key=')) {
-                try {
-                    const cleanHash = hash.startsWith('#') ? hash.substring(1) : hash;
-                    const params = new URLSearchParams(cleanHash);
-                    const keyHex = params.get('key');
-                    const saltParam = params.get('salt');
-                    if (saltParam) sessionSaltHex = saltParam;
-
-                    if (keyHex) {
-                        const keyBytes = hexToBytes(keyHex);
-                        cryptoKey = await importRawAesKey(keyBytes);
-                        activeKeyFingerprint = await computeKeyFingerprint(cryptoKey);
-                        sessionStorage.setItem('aether_e2ee_key', keyHex);
-                        
-                        try {
-                            history.replaceState(null, "", window.location.pathname + window.location.search);
-                        } catch(e) {}
-
-                        updateShieldUi(true, 'Active');
-                        return;
-                    }
-                } catch(e) {
-                    console.error("Error reading URL key hash:", e);
-                }
-            }
-
-            // 2. Check sessionStorage
-            const savedKeyHex = sessionStorage.getItem('aether_e2ee_key');
-            if (savedKeyHex) {
-                try {
-                    const keyBytes = hexToBytes(savedKeyHex);
-                    cryptoKey = await importRawAesKey(keyBytes);
-                    activeKeyFingerprint = await computeKeyFingerprint(cryptoKey);
-                    updateShieldUi(true, 'Active');
-                    return;
-                } catch(e) {
-                    sessionStorage.removeItem('aether_e2ee_key');
-                }
-            }
-
-            // 3. Check /api/crypto/info for automatic key exchange in public rooms
             try {
                 const infoRes = await fetch('/api/crypto/info');
                 if (infoRes.ok) {
                     const info = await infoRes.json();
                     if (info.salt) sessionSaltHex = info.salt;
-                    if (!info.isPrivate && info.autoKey) {
-                        const keyBytes = hexToBytes(info.autoKey);
-                        cryptoKey = await importRawAesKey(keyBytes);
-                        activeKeyFingerprint = await computeKeyFingerprint(cryptoKey);
-                        sessionStorage.setItem('aether_e2ee_key', info.autoKey);
-                        updateShieldUi(true, 'Active');
+                    if (!info.isPrivate) {
+                        // Public room: no PIN barrier required
+                        if (info.autoKey && window.crypto && window.crypto.subtle) {
+                            try {
+                                cryptoKey = await importRawAesKey(hexToBytes(info.autoKey));
+                                activeKeyFingerprint = await computeKeyFingerprint(cryptoKey);
+                            } catch(e) {}
+                        }
+                        updateShieldUi(true, 'Mesh Active');
                         return;
+                    }
+
+                    // Private room: check if saved PIN is valid
+                    if (activePin) {
+                        const vRes = await fetch('/api/crypto/verify-pin', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ pin: activePin })
+                        });
+                        const vData = await vRes.json();
+                        if (vData.verified) {
+                            activeKeyFingerprint = vData.fingerprint || 'PIN-VERIFIED';
+                            if (vData.key && window.crypto && window.crypto.subtle) {
+                                try {
+                                    cryptoKey = await importRawAesKey(hexToBytes(vData.key));
+                                } catch(e) {}
+                            }
+                            updateShieldUi(true, 'Active');
+                            return;
+                        }
                     }
                 }
             } catch(e) {
-                console.warn("Could not fetch crypto info auto-key:", e);
+                console.warn("Could not check crypto info:", e);
             }
 
-            // 4. Prompt for PIN if private room or manual key derivation required
+            // Private room and no verified PIN yet:
             updateShieldUi(false, 'PIN Needed');
             document.getElementById('pin-prompt-modal').style.display = 'flex';
         }
@@ -871,23 +1307,31 @@ object WebPortalTemplate {
                 return;
             }
             const btn = document.getElementById('pin-submit-btn');
-            btn.innerText = "⏳ Sealing Session...";
+            btn.innerText = "⏳ Verifying Session...";
             btn.disabled = true;
 
             try {
-                if (!sessionSaltHex) {
-                    const infoRes = await fetch('/api/crypto/info');
-                    if (infoRes.ok) {
-                        const info = await infoRes.json();
-                        sessionSaltHex = info.salt || '';
+                const verifyRes = await fetch('/api/crypto/verify-pin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pin: pin })
+                });
+                const verifyData = await verifyRes.json();
+                if (!verifyData.verified) {
+                    throw new Error(verifyData.error || "Incorrect Host PIN. Please check the host screen.");
+                }
+
+                activePin = pin;
+                sessionStorage.setItem('aether_pin', pin);
+                activeKeyFingerprint = verifyData.fingerprint || 'PIN-VERIFIED';
+
+                if (verifyData.key && window.crypto && window.crypto.subtle) {
+                    try {
+                        cryptoKey = await importRawAesKey(hexToBytes(verifyData.key));
+                    } catch(e) {
+                        console.warn("Subtle crypto key import skipped:", e);
                     }
                 }
-                const saltBytes = hexToBytes(sessionSaltHex);
-                cryptoKey = await deriveKeyFromPin(pin, saltBytes);
-                activeKeyFingerprint = await computeKeyFingerprint(cryptoKey);
-
-                const rawKey = await window.crypto.subtle.exportKey("raw", cryptoKey);
-                sessionStorage.setItem('aether_e2ee_key', bytesToHex(new Uint8Array(rawKey)));
 
                 document.getElementById('pin-prompt-modal').style.display = 'none';
                 updateShieldUi(true, 'Active');
@@ -895,7 +1339,7 @@ object WebPortalTemplate {
                 btn.disabled = false;
                 fetchHistory();
             } catch(e) {
-                alert("Encryption setup failed: " + e.message);
+                alert("Verification failed: " + e.message);
                 btn.innerText = "🔐 Verify &amp; Seal Session";
                 btn.disabled = false;
             }
@@ -968,74 +1412,179 @@ object WebPortalTemplate {
             const targetView = document.getElementById('view-' + pageId);
             if (targetView) targetView.classList.add('active');
 
-            const navIndex = { 'chat': 0, 'music': 1, 'files': 2, 'arcade': 3, 'tools': 4 }[pageId] || 0;
+            const navIndex = { 'chat': 0, 'radar': 1, 'files': 2, 'arcade': 3 }[pageId] || 0;
             const navBtn = document.querySelectorAll('.nav-item')[navIndex];
             if (navBtn) navBtn.classList.add('active');
 
-            const titles = { 'chat': 'MeshChat Room', 'music': 'Mesh Jukebox', 'files': 'Shared File Vault', 'arcade': 'Mesh Arcade', 'tools': 'Mesh Tools' };
+            const titles = { 'chat': 'MeshChat Room', 'radar': 'Mesh Radar', 'files': 'Shared File Vault', 'arcade': 'Mesh Arcade' };
             document.getElementById('header-page-title').innerText = titles[pageId] || 'MeshChat';
 
-            if (pageId === 'music') fetchMusicStatus();
+            if (pageId === 'radar') fetchRadarPeers();
             if (pageId === 'files') loadSharedFiles();
-            if (pageId === 'tools') fetchClipboard();
             if (pageId === 'chat') {
                 const scroller = document.getElementById('messages-scroller');
-                scroller.scrollTop = scroller.scrollHeight;
+                if (scroller) scroller.scrollTop = scroller.scrollHeight;
             }
         }
 
-        async function fetchMusicStatus() {
+        function launchArcadeGame(url, title) {
+            const menu = document.getElementById('arcade-menu-view');
+            const frameContainer = document.getElementById('active-game-frame-container');
+            const titleEl = document.getElementById('active-game-title');
+            const iframe = document.getElementById('active-game-iframe');
+            if (menu) menu.style.display = 'none';
+            if (titleEl) titleEl.innerText = title || 'Arcade Game';
+            if (iframe) iframe.src = url;
+            if (frameContainer) frameContainer.style.display = 'flex';
+        }
+
+        function closeArcadeGame() {
+            const menu = document.getElementById('arcade-menu-view');
+            const frameContainer = document.getElementById('active-game-frame-container');
+            const iframe = document.getElementById('active-game-iframe');
+            if (frameContainer) frameContainer.style.display = 'none';
+            if (iframe) iframe.src = 'about:blank';
+            if (menu) menu.style.display = 'flex';
+        }
+
+        // Radar Mesh Discovery Engine
+        async function fetchRadarPeers() {
+            const list = document.getElementById('radar-peers-list');
+            const blipsLayer = document.getElementById('radar-blips-layer');
+            const countBadge = document.getElementById('radar-live-count');
             try {
-                const res = await fetch('/api/music/status');
-                if (res.ok) {
-                    const data = await res.json();
-                    document.getElementById('web-music-title').innerText = data.trackTitle || 'No Track Playing';
-                    document.getElementById('web-music-artist').innerText = data.artist || 'Mesh Party Jukebox';
-                    if (data.isPlaying) {
-                        document.getElementById('web-music-party-badge').innerText = '🟢 LIVE DJ BROADCAST ACTIVE';
+                const res = await fetch('/api/radar/peers');
+                if (!res.ok) return;
+                const data = await res.json();
+                const peers = data.peers || [];
+                const total = peers.length + 1; // +1 for host
+                if (countBadge) countBadge.innerText = total + (total === 1 ? ' Peer Active' : ' Peers Active');
+
+                if (blipsLayer) {
+                    blipsLayer.innerHTML = '';
+                    peers.forEach((p, idx) => {
+                        const angle = (idx * (360 / Math.max(1, peers.length))) * (Math.PI / 180);
+                        const radius = 35 + ((idx % 3) * 20);
+                        const x = 100 + radius * Math.cos(angle) - 6;
+                        const y = 100 + radius * Math.sin(angle) - 6;
+                        const blip = document.createElement('div');
+                        blip.style.cssText = `position:absolute;left:${'$'}{x}px;top:${'$'}{y}px;width:12px;height:12px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf8;animation:pulse 1.5s infinite alternate;`;
+                        blip.title = p.name;
+                        blipsLayer.appendChild(blip);
+                    });
+                }
+
+                if (list) {
+                    list.innerHTML = '';
+                    // Host node
+                    const hostCard = document.createElement('div');
+                    hostCard.style.cssText = 'background:var(--card-bg);border:1px solid #00e676;border-radius:12px;padding:12px;display:flex;align-items:center;justify-content:space-between;';
+                    hostCard.innerHTML = `
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <span style="font-size:22px;">📱</span>
+                            <div>
+                                <div style="font-weight:bold;font-size:14px;color:#00e676;">${'$'}{data.localNode?.name || 'Local Host'} <span style="font-size:10px;background:#005d4b;color:#fff;padding:2px 6px;border-radius:6px;margin-left:4px;">HOST</span></div>
+                                <div style="font-size:11px;color:var(--text-secondary);">${'$'}{data.localNode?.ip || '192.168.49.1'} • Mesh AP Gateway</div>
+                            </div>
+                        </div>
+                        <span style="font-size:11px;color:#00e676;font-weight:bold;">Online</span>
+                    `;
+                    list.appendChild(hostCard);
+
+                    if (peers.length === 0) {
+                        const empty = document.createElement('div');
+                        empty.style.cssText = 'text-align:center;color:var(--text-secondary);font-size:12px;padding:16px;';
+                        empty.innerText = 'No other guest peers currently connected. Turn on other devices to join hotspot.';
+                        list.appendChild(empty);
+                    } else {
+                        peers.forEach(p => {
+                            const pCard = document.createElement('div');
+                            pCard.style.cssText = 'background:var(--card-bg);border:1px solid var(--border-color);border-radius:12px;padding:12px;display:flex;align-items:center;justify-content:space-between;';
+                            pCard.innerHTML = `
+                                <div style="display:flex;align-items:center;gap:10px;">
+                                    <span style="font-size:20px;">👤</span>
+                                    <div>
+                                        <div style="font-weight:bold;font-size:14px;">${'$'}{p.name || 'Peer'}</div>
+                                        <div style="font-size:11px;color:var(--text-secondary);">${'$'}{p.transport || 'Wi-Fi Hotspot'} • Direct Link</div>
+                                    </div>
+                                </div>
+                                <span style="font-size:11px;color:#38bdf8;font-weight:bold;">${'$'}{p.status || 'Active'}</span>
+                            `;
+                            list.appendChild(pCard);
+                        });
                     }
                 }
-            } catch(e) {}
+            } catch(e) {
+                if (list) list.innerHTML = '<div style="text-align:center;color:#ef5350;font-size:12px;padding:12px;">Failed to scan mesh radar.</div>';
+            }
         }
 
-        function syncWithDjStream() {
-            const audio = document.getElementById('mesh-web-audio');
-            audio.src = '/audio/current?t=' + Date.now();
-            audio.play().catch(e => console.log('Autoplay policy prevented playback', e));
-            fetchMusicStatus();
+        // Unified APK Download Modal
+        function openApkModal() {
+            document.getElementById('apk-download-modal').style.display = 'flex';
+        }
+        function closeApkModal() {
+            document.getElementById('apk-download-modal').style.display = 'none';
         }
 
-        function playRadioPreset(url, name) {
-            const audio = document.getElementById('mesh-web-audio');
-            audio.src = url;
-            document.getElementById('web-music-title').innerText = name;
-            document.getElementById('web-music-artist').innerText = 'Online Web Radio';
-            audio.play().catch(e => console.log(e));
+        // Live Interactive Tool Runner
+        function launchInteractiveTool(id, title) {
+            const modal = document.getElementById('tool-runner-modal');
+            const iframe = document.getElementById('tool-runner-iframe');
+            const titleEl = document.getElementById('tool-runner-title');
+            if (titleEl) titleEl.innerText = title || 'Mesh Interactive Tool';
+            if (iframe) iframe.src = '/tools/run/' + encodeURIComponent(id);
+            if (modal) modal.style.display = 'flex';
+        }
+        function closeInteractiveTool() {
+            const modal = document.getElementById('tool-runner-modal');
+            const iframe = document.getElementById('tool-runner-iframe');
+            if (iframe) iframe.src = 'about:blank';
+            if (modal) modal.style.display = 'none';
         }
 
-        function playCustomStream() {
-            const input = document.getElementById('web-stream-input');
-            const url = input.value.trim();
-            if (!url) return;
-            playRadioPreset(url, 'Custom Audio Stream');
+        // Direct Vault Upload Handlers
+        let vaultSelectedFile = null;
+        function handleVaultFileSelected(event) {
+            const files = event.target.files;
+            if (files && files.length > 0) {
+                vaultSelectedFile = files[0];
+                document.getElementById('vault-file-chosen-name').innerText = 'Selected: ' + vaultSelectedFile.name + ' (' + Math.round(vaultSelectedFile.size / 1024) + ' KB)';
+                document.getElementById('vault-upload-submit-btn').style.display = 'inline-flex';
+            }
         }
 
-        // Embedded Game Engine (Keeps WebSocket alive inside iframe)
-        function openEmbeddedGame(url, title) {
-            document.getElementById('arcade-menu').style.display = 'none';
-            const frameContainer = document.getElementById('active-game-frame-container');
-            const iframe = document.getElementById('active-game-iframe');
-            document.getElementById('active-game-title').innerText = title;
-            iframe.src = url;
-            frameContainer.style.display = 'flex';
-        }
+        async function handleVaultUpload(event) {
+            event.preventDefault();
+            if (!vaultSelectedFile) return;
+            const btn = document.getElementById('vault-upload-submit-btn');
+            btn.innerText = '⏳ Uploading...';
+            btn.disabled = true;
 
-        function closeEmbeddedGame() {
-            const frameContainer = document.getElementById('active-game-frame-container');
-            const iframe = document.getElementById('active-game-iframe');
-            iframe.src = 'about:blank';
-            frameContainer.style.display = 'none';
-            document.getElementById('arcade-menu').style.display = 'flex';
+            const formData = new FormData();
+            formData.append('sender', myName);
+            formData.append('file', vaultSelectedFile);
+
+            try {
+                const res = await fetch('/upload', { method: 'POST', body: formData });
+                if (res.ok) {
+                    document.getElementById('vault-file-input').value = '';
+                    document.getElementById('vault-file-chosen-name').innerText = 'File shared successfully!';
+                    btn.style.display = 'none';
+                    btn.innerText = '📤 Upload to Mesh';
+                    btn.disabled = false;
+                    vaultSelectedFile = null;
+                    loadSharedFiles();
+                } else {
+                    alert('Upload failed: ' + res.statusText);
+                    btn.innerText = '📤 Upload to Mesh';
+                    btn.disabled = false;
+                }
+            } catch(err) {
+                alert('Upload error: ' + err.message);
+                btn.innerText = '📤 Upload to Mesh';
+                btn.disabled = false;
+            }
         }
 
         // Shared File Repository Loader
@@ -1138,42 +1687,73 @@ object WebPortalTemplate {
                 div.appendChild(s);
             }
 
-            const words = text.split(' ');
-            for (let w of words) {
-                if (w.startsWith('http://') || w.startsWith('https://')) {
-                    const isImg = w.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp)$/i) || w.includes("/files/web_shared_") || w.includes("mesh_cache");
-                    const isAudio = w.match(/\.(m4a|mp3|wav|ogg|opus|aac|webm)$/i) || w.includes("web_audio_") || w.includes("/audio_");
-                    if (isImg) {
-                        const img = document.createElement('img');
-                        img.src = w;
-                        img.style.maxWidth = '100%';
-                        img.style.borderRadius = '6px';
-                        img.style.marginTop = '4px';
-                        img.style.display = 'block';
-                        div.appendChild(img);
-                    } else if (isAudio) {
-                        const audio = document.createElement('audio');
-                        audio.controls = true;
-                        audio.src = w;
-                        audio.style.maxWidth = '250px';
-                        audio.style.height = '36px';
-                        audio.style.marginTop = '4px';
-                        audio.style.display = 'block';
-                        div.appendChild(audio);
+            let toolObj = null;
+            try {
+                const parsed = JSON.parse(text);
+                if (parsed && parsed.type === 'interactive_tool') {
+                    toolObj = parsed;
+                }
+            } catch(e) {}
+
+            if (toolObj) {
+                const toolCard = document.createElement('div');
+                toolCard.style.cssText = 'background:rgba(56,189,248,0.12);border:1px solid #38bdf8;border-radius:12px;padding:12px;margin:4px 0;';
+                const safeTitle = (toolObj.title || 'Tool').replace(/'/g, "\\'");
+                toolCard.innerHTML = `
+                    <div style="display:flex;align-items:center;gap:6px;font-weight:bold;color:#38bdf8;font-size:14px;">
+                        <span>⚡</span>
+                        <span>${'$'}{toolObj.title || 'Mesh Interactive Tool'}</span>
+                    </div>
+                    <div style="font-size:11px;color:var(--text-secondary);margin:4px 0 8px;">
+                        Shared by ${'$'}{toolObj.author || sender} • ${'$'}{toolObj.language?.toUpperCase() || 'WEB'}
+                    </div>
+                    <div style="font-family:monospace;font-size:11px;background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;color:#94a3b8;margin-bottom:10px;white-space:pre-wrap;max-height:60px;overflow:hidden;">${'$'}{(toolObj.snippet || '').substring(0, 100)}...</div>
+                    <button class="action-btn green" onclick="launchInteractiveTool('${'$'}{toolObj.toolId}', '${'$'}{safeTitle}')" style="width:100%;justify-content:center;padding:8px;font-size:13px;border-radius:8px;">
+                        ▶️ Launch Live Tool
+                    </button>
+                `;
+                div.appendChild(toolCard);
+            } else {
+                const words = text.split(' ');
+                for (let w of words) {
+                    if (w.startsWith('http://') || w.startsWith('https://')) {
+                        const isImg = w.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp)$/i) || w.includes("/files/web_shared_") || w.includes("mesh_cache");
+                        const isAudio = w.match(/\.(m4a|mp3|wav|ogg|opus|aac|webm)$/i) || w.includes("web_audio_") || w.includes("/audio_") || w.includes("voice_");
+                        if (isImg) {
+                            const img = document.createElement('img');
+                            img.src = w;
+                            img.style.maxWidth = '100%';
+                            img.style.borderRadius = '6px';
+                            img.style.marginTop = '4px';
+                            img.style.display = 'block';
+                            div.appendChild(img);
+                        } else if (isAudio) {
+                            const audio = document.createElement('audio');
+                            audio.controls = true;
+                            audio.src = w;
+                            audio.style.maxWidth = '250px';
+                            audio.style.height = '36px';
+                            audio.style.marginTop = '4px';
+                            audio.style.display = 'block';
+                            div.appendChild(audio);
+                            if (typeof registerWalkieTransmission === 'function') {
+                                registerWalkieTransmission(sender || 'Mesh Peer', w, isMe);
+                            }
+                        } else {
+                            const a = document.createElement('a');
+                            a.href = w;
+                            a.target = '_blank';
+                            a.innerText = '📎 ' + (w.substring(w.lastIndexOf('/') + 1) || 'File');
+                            a.style.color = isMe ? '#e9edef' : '#25d366';
+                            a.style.textDecoration = 'underline';
+                            a.style.display = 'inline-block';
+                            a.style.marginTop = '4px';
+                            div.appendChild(a);
+                        }
+                        div.appendChild(document.createTextNode(' '));
                     } else {
-                        const a = document.createElement('a');
-                        a.href = w;
-                        a.target = '_blank';
-                        a.innerText = '📎 ' + (w.substring(w.lastIndexOf('/') + 1) || 'File');
-                        a.style.color = isMe ? '#e9edef' : '#25d366';
-                        a.style.textDecoration = 'underline';
-                        a.style.display = 'inline-block';
-                        a.style.marginTop = '4px';
-                        div.appendChild(a);
+                        div.appendChild(document.createTextNode(w + ' '));
                     }
-                    div.appendChild(document.createTextNode(' '));
-                } else {
-                    div.appendChild(document.createTextNode(w + ' '));
                 }
             }
 
@@ -1184,11 +1764,6 @@ object WebPortalTemplate {
             div.appendChild(timeSpan);
 
             messagesScroller.appendChild(div);
-            if (burnAfterRead) {
-                setTimeout(() => {
-                    if (div && div.parentNode) div.remove();
-                }, 60000);
-            }
             if (scroll) messagesScroller.scrollTop = messagesScroller.scrollHeight;
         }
 
@@ -1205,17 +1780,17 @@ object WebPortalTemplate {
                         let senderName = m.sender;
                         let msgText = m.message;
                         if (m.type === 'e2ee' && m.payload) {
-                            if (cryptoKey) {
-                                try {
-                                    const dec = await decryptPayload(m.payload, cryptoKey);
-                                    const parsed = JSON.parse(dec);
-                                    senderName = parsed.sender || senderName;
-                                    msgText = parsed.message || '';
-                                } catch(e) {
+                            try {
+                                const dec = await decryptPayload(m.payload, cryptoKey);
+                                const parsed = JSON.parse(dec);
+                                senderName = parsed.sender || senderName;
+                                msgText = parsed.message || '';
+                            } catch(e) {
+                                if (m.message && m.message !== m.payload) {
+                                    msgText = m.message;
+                                } else {
                                     msgText = '🔒 [Ciphertext - Enter Host PIN to decrypt]';
                                 }
-                            } else {
-                                msgText = '🔒 [Ciphertext - Enter Host PIN to decrypt]';
                             }
                         }
                         try {
@@ -1269,13 +1844,11 @@ object WebPortalTemplate {
                 try {
                     let data = JSON.parse(e.data);
                     if (data.type === 'e2ee' && data.payload) {
-                        if (cryptoKey) {
-                            try {
-                                const dec = await decryptPayload(data.payload, cryptoKey);
-                                data = JSON.parse(dec);
-                            } catch(err) {
-                                console.error("Could not decrypt ws frame", err);
-                            }
+                        try {
+                            const dec = await decryptPayload(data.payload, cryptoKey);
+                            data = JSON.parse(dec);
+                        } catch(err) {
+                            console.error("Could not decrypt ws frame", err);
                         }
                     }
                     const msg = JSON.parse(data.message || e.data);
@@ -1328,44 +1901,434 @@ object WebPortalTemplate {
             }
         } catch (e) {}
 
-        // Voice Room Phase 2: dashboard panel (audio pipe lands in Phase 3).
+        // Mesh Walkie-Talkie (Push-to-Talk) & Voice Engine
         let voicePanelState = 'idle'; // idle | requested | joined
+        let pttRecording = false;
+        let pttHoldMode = false;
+        let pttPressStartTime = 0;
+        let pttTimer = null;
+        let pttDuration = 0;
+        let pttStream = null;
+        let pttMediaRecorder = null;
+        let pttAudioChunks = [];
+        let autoPlayVoice = localStorage.getItem('walkie_autoplay') !== '0';
+        let walkieTransmissions = [];
+        const playedWalkieUrls = new Set();
+
         function toggleVoicePanel() {
             const p = document.getElementById('voice-panel');
             const open = p.style.display !== 'flex';
             p.style.display = open ? 'flex' : 'none';
             if (open) updateVoicePanel();
         }
+
+        function toggleVoiceAutoplay(checked) {
+            autoPlayVoice = checked;
+            localStorage.setItem('walkie_autoplay', checked ? '1' : '0');
+        }
+
+        function toggleContinuousMicSection() {
+            const sec = document.getElementById('continuous-mic-section');
+            const chev = document.getElementById('continuous-mic-chevron');
+            if (!sec) return;
+            const isHidden = sec.style.display === 'none' || sec.style.display === '';
+            sec.style.display = isHidden ? 'block' : 'none';
+            if (chev) chev.innerText = isHidden ? '▲' : '▼';
+        }
+
+        function playPttTransmitBeep() {
+            try {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) return;
+                const ctx = new AC();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(1050, ctx.currentTime);
+                osc.frequency.setValueAtTime(1350, ctx.currentTime + 0.05);
+                gain.gain.setValueAtTime(0.16, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.12);
+            } catch(e) {}
+        }
+
+        function playRadioSquelch() {
+            try {
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) return;
+                const ctx = new AC();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(850, ctx.currentTime);
+                osc.frequency.setValueAtTime(620, ctx.currentTime + 0.06);
+                gain.gain.setValueAtTime(0.18, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.15);
+            } catch(e) {}
+        }
+
         function updateVoicePanel() {
-            const warn = document.getElementById('voice-https-warning');
-            if (window.location.protocol !== 'https:') {
-                warn.style.display = 'block';
-                warn.innerHTML = 'Mic needs a secure page. Open the voice portal: <a id="voice-https-link" style="color:#ffe0b2;font-weight:bold;" target="_blank">tap here for HTTPS</a>';
-                document.getElementById('voice-https-link').href = 'https://' + window.location.hostname + ':8443/';
-            } else {
-                warn.style.display = 'none';
-            }
             const joinBtn = document.getElementById('voice-join-btn');
             const micBtn = document.getElementById('voice-mic-btn');
             const deafBtn = document.getElementById('voice-deafen-btn');
-            const status = document.getElementById('voice-panel-status');
             if (voicePanelState === 'idle') {
-                joinBtn.style.display = 'block';
-                micBtn.style.display = 'none';
-                deafBtn.style.display = 'none';
-                status.innerText = 'A live voice channel for everyone in this room.';
-            } else if (voicePanelState === 'requested') {
-                joinBtn.style.display = 'none';
-                micBtn.style.display = 'none';
-                deafBtn.style.display = 'none';
-                status.innerText = 'Request sent — waiting for the host to allow voice...';
+                if (joinBtn) joinBtn.style.display = 'block';
+                if (micBtn) micBtn.style.display = 'none';
+                if (deafBtn) deafBtn.style.display = 'none';
             } else {
-                joinBtn.style.display = 'none';
-                micBtn.style.display = 'block';
-                deafBtn.style.display = 'block';
-                status.innerText = 'You are in the voice room.';
+                if (joinBtn) joinBtn.style.display = 'none';
+                if (micBtn) micBtn.style.display = 'block';
+                if (deafBtn) deafBtn.style.display = 'block';
+            }
+            renderWalkieTransmissions();
+            checkMicPermission();
+        }
+
+        async function checkMicPermission() {
+            const btn = document.getElementById('mic-perm-btn');
+            const hint = document.getElementById('mic-status-hint');
+            if (!btn || !hint) return;
+
+            const isHttps = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+            if (!isHttps) {
+                btn.innerText = '🔒 Switch to HTTPS';
+                btn.style.color = '#ffb74d';
+                btn.style.borderColor = 'rgba(255,183,77,0.4)';
+                hint.innerHTML = 'Connected via HTTP. Tap above for HTTPS, or use <b>Device Mic Popup</b>.';
+                return;
+            }
+
+            if (navigator.permissions && navigator.permissions.query) {
+                try {
+                    const status = await navigator.permissions.query({ name: 'microphone' });
+                    if (status.state === 'granted') {
+                        btn.innerText = '✅ Mic Allowed';
+                        btn.style.color = '#00e676';
+                        btn.style.borderColor = 'rgba(0,230,118,0.5)';
+                        hint.innerHTML = 'Microphone permission active. Hold/tap mic above to broadcast!';
+                    } else if (status.state === 'prompt') {
+                        btn.innerText = '🔑 Allow Mic';
+                        btn.style.color = '#00e676';
+                        hint.innerHTML = 'Tap <b>Allow Mic</b> to show browser permission prompt';
+                    } else if (status.state === 'denied') {
+                        btn.innerText = '⚠️ Mic Blocked';
+                        btn.style.color = '#ef4444';
+                        btn.style.borderColor = 'rgba(239,68,68,0.4)';
+                        hint.innerHTML = 'Mic blocked in browser. Tap lock icon in address bar to Allow.';
+                    }
+                    status.onchange = () => checkMicPermission();
+                    return;
+                } catch(e) {}
+            }
+
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                btn.innerText = '🔑 Prompt Mic';
+                hint.innerHTML = 'Tap to request browser microphone permission';
             }
         }
+
+        async function requestBrowserMicPermission() {
+            const isHttps = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+            if (!isHttps) {
+                const targetHttps = 'https://' + window.location.hostname + ':8443/';
+                const go = confirm('Direct in-browser microphone capture is restricted by browser security policies on unencrypted HTTP.\n\nTap OK to switch to the secure HTTPS portal (:8443), or Cancel to use the device sound recorder popup.');
+                if (go) window.location.href = targetHttps;
+                else triggerNativeVoiceRecord();
+                return;
+            }
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                alert('Your browser does not support in-browser audio capture. Please use the Device Mic Popup button.');
+                triggerNativeVoiceRecord();
+                return;
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                stream.getTracks().forEach(t => t.stop());
+                alert('✅ Microphone permission granted! You can now hold or tap the mic button to transmit voice.');
+                checkMicPermission();
+            } catch(err) {
+                if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                    alert('⚠️ Microphone was blocked by your browser.\n\nTo allow it: tap the tune / lock icon next to the address bar at the top, select Permissions -> Microphone -> Allow, then refresh this page.');
+                } else {
+                    alert('Could not access microphone: ' + err.message);
+                }
+                checkMicPermission();
+            }
+        }
+
+        function triggerNativeVoiceRecord() {
+            const input = document.getElementById('voice-native-recorder');
+            if (input) {
+                input.click();
+            }
+        }
+
+        async function handleNativeVoiceRecorded(input) {
+            if (!input.files || input.files.length === 0) return;
+            const file = input.files[0];
+            updatePttUi(false, '📡 Transmitting to Mesh...');
+            await sendVoiceBlob(file);
+            input.value = '';
+        }
+
+        async function startPttInteraction(e) {
+            if (e) {
+                if (e.pointerType === 'mouse' && e.button !== 0) return;
+                e.preventDefault();
+            }
+            // If already recording in tap toggle mode, tapping again triggers transmit!
+            if (pttRecording && !pttHoldMode) {
+                stopPttAndTransmit();
+                return;
+            }
+            if (pttRecording) return;
+
+            pttPressStartTime = Date.now();
+            pttHoldMode = true;
+
+            const hasMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+            if (!hasMedia) {
+                pttHoldMode = false;
+                triggerNativeVoiceRecord();
+                return;
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+                });
+                pttStream = stream;
+                pttAudioChunks = [];
+                let mimeType = 'audio/webm';
+                if (window.MediaRecorder && !MediaRecorder.isTypeSupported('audio/webm')) {
+                    if (MediaRecorder.isTypeSupported('audio/mp4')) mimeType = 'audio/mp4';
+                    else if (MediaRecorder.isTypeSupported('audio/aac')) mimeType = 'audio/aac';
+                    else mimeType = '';
+                }
+                pttMediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+                pttMediaRecorder.ondataavailable = ev => {
+                    if (ev.data && ev.data.size > 0) pttAudioChunks.push(ev.data);
+                };
+                pttMediaRecorder.onstop = async () => {
+                    if (pttStream) {
+                        pttStream.getTracks().forEach(t => t.stop());
+                        pttStream = null;
+                    }
+                    if (pttAudioChunks.length > 0) {
+                        const type = pttMediaRecorder ? (pttMediaRecorder.mimeType || 'audio/webm') : 'audio/webm';
+                        const blob = new Blob(pttAudioChunks, { type });
+                        await sendVoiceBlob(blob);
+                    }
+                };
+
+                pttMediaRecorder.start(250);
+                pttRecording = true;
+                pttDuration = 0;
+                updatePttUi(true);
+
+                clearInterval(pttTimer);
+                pttTimer = setInterval(() => {
+                    pttDuration++;
+                    const mins = Math.floor(pttDuration / 60);
+                    const secs = String(pttDuration % 60).padStart(2, '0');
+                    const label = document.getElementById('voice-ptt-label');
+                    if (label && pttRecording) {
+                        label.innerText = '🔴 Recording... ' + mins + ':' + secs + ' (Release or Tap to Send)';
+                    }
+                }, 1000);
+
+            } catch(err) {
+                console.warn('Direct mic access error, falling back to native capture:', err);
+                pttRecording = false;
+                pttHoldMode = false;
+                triggerNativeVoiceRecord();
+            }
+        }
+
+        function stopPttInteraction(e) {
+            if (e) e.preventDefault();
+            if (!pttRecording) return;
+
+            const durationPressed = Date.now() - pttPressStartTime;
+            // Short tap: switch to tap-to-record mode!
+            if (durationPressed < 400 && pttHoldMode) {
+                pttHoldMode = false;
+                const label = document.getElementById('voice-ptt-label');
+                if (label) label.innerText = '🔴 Recording... Tap button to Transmit';
+                const cancelBtn = document.getElementById('ptt-cancel-btn');
+                if (cancelBtn) cancelBtn.style.display = 'inline-block';
+                return;
+            }
+
+            stopPttAndTransmit();
+        }
+
+        function handlePttClick(e) {
+            if (e) e.preventDefault();
+            if (pttRecording && !pttHoldMode) {
+                stopPttAndTransmit();
+            }
+        }
+
+        function stopPttAndTransmit() {
+            if (!pttRecording) return;
+            pttRecording = false;
+            pttHoldMode = false;
+            clearInterval(pttTimer);
+            updatePttUi(false, '📡 Transmitting to Mesh...');
+
+            if (pttMediaRecorder && pttMediaRecorder.state !== 'inactive') {
+                try { pttMediaRecorder.stop(); } catch(err) {}
+            }
+        }
+
+        function cancelPttRecording() {
+            if (!pttRecording) return;
+            pttRecording = false;
+            pttHoldMode = false;
+            clearInterval(pttTimer);
+            if (pttMediaRecorder) {
+                pttMediaRecorder.onstop = null;
+                try { pttMediaRecorder.stop(); } catch(e) {}
+            }
+            if (pttStream) {
+                pttStream.getTracks().forEach(t => t.stop());
+                pttStream = null;
+            }
+            updatePttUi(false, 'Hold or Tap to Speak');
+        }
+
+        function updatePttUi(isRec, customLabel) {
+            const btn = document.getElementById('voice-ptt-btn');
+            const label = document.getElementById('voice-ptt-label');
+            const cancelBtn = document.getElementById('ptt-cancel-btn');
+
+            if (btn) {
+                if (isRec) {
+                    btn.classList.add('ptt-active-recording');
+                } else {
+                    btn.classList.remove('ptt-active-recording');
+                    btn.style.background = '#00a884';
+                    btn.style.borderColor = '#00e676';
+                }
+            }
+            if (cancelBtn) {
+                cancelBtn.style.display = (isRec && !pttHoldMode) ? 'inline-block' : 'none';
+            }
+            if (label) {
+                if (customLabel) {
+                    label.innerText = customLabel;
+                } else if (isRec) {
+                    label.innerText = '🔴 Recording... Release or Tap to Send';
+                } else {
+                    label.innerText = 'Hold or Tap to Speak';
+                }
+            }
+        }
+
+        async function sendVoiceBlob(blob) {
+            playPttTransmitBeep();
+            const formData = new FormData();
+            formData.append('sender', myName);
+            const ext = blob.name ? blob.name.substring(blob.name.lastIndexOf('.')) : (blob.type && blob.type.includes('mp4') ? '.m4a' : '.webm');
+            const filename = 'voice_' + Date.now() + (ext.startsWith('.') ? ext : '.' + ext);
+            formData.append('file', blob, filename);
+            try {
+                await fetch('/upload', { method: 'POST', body: formData });
+                fetchHistory();
+                updatePttUi(false, '✅ Transmitted to Peers!');
+                setTimeout(() => { updatePttUi(false, 'Hold or Tap to Speak'); }, 2000);
+            } catch(err) {
+                console.warn("Voice chunk upload failed:", err);
+                updatePttUi(false, '⚠️ Transmit Failed. Retry');
+            }
+        }
+
+        function registerWalkieTransmission(sender, url, isMe) {
+            if (!url) return;
+            if (!walkieTransmissions.some(t => t.url === url)) {
+                walkieTransmissions.unshift({
+                    sender: sender || 'Mesh Peer',
+                    url: url,
+                    time: new Date(),
+                    isMe: isMe
+                });
+                if (walkieTransmissions.length > 25) walkieTransmissions.pop();
+                renderWalkieTransmissions();
+            }
+
+            // Loudspeaker auto-play: automatically play incoming voice from peers
+            if (!isMe && autoPlayVoice && !playedWalkieUrls.has(url)) {
+                playedWalkieUrls.add(url);
+                playRadioSquelch();
+                const statusEl = document.getElementById('voice-panel-status');
+                if (statusEl) statusEl.innerText = '📻 Receiving voice from ' + sender + '...';
+                const audio = new Audio(url);
+                audio.onended = () => {
+                    if (statusEl) statusEl.innerText = 'Instant offline push-to-talk voice radio over local Wi-Fi mesh.';
+                };
+                audio.play().catch(e => {
+                    console.log('Autoplay deferred by browser policy:', e);
+                });
+            }
+        }
+
+        function renderWalkieTransmissions() {
+            const list = document.getElementById('ptt-transmissions-list');
+            const count = document.getElementById('ptt-trans-count');
+            if (count) count.innerText = walkieTransmissions.length + ' clips';
+            if (!list) return;
+
+            if (walkieTransmissions.length === 0) {
+                list.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);text-align:center;padding:12px;background:var(--input-bg);border-radius:8px;">No transmissions yet. Hold mic above to broadcast!</div>';
+                return;
+            }
+
+            list.innerHTML = '';
+            walkieTransmissions.forEach(t => {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;background:var(--input-bg);border-radius:8px;padding:8px 10px;font-size:12px;border-left:3px solid ' + (t.isMe ? 'var(--accent-green)' : '#38bdf8') + ';';
+                
+                const left = document.createElement('div');
+                left.style.cssText = 'display:flex;flex-direction:column;gap:2px;overflow:hidden;margin-right:8px;';
+                
+                const title = document.createElement('div');
+                title.style.fontWeight = 'bold';
+                title.style.color = t.isMe ? 'var(--accent-green)' : '#e9edef';
+                title.innerText = (t.isMe ? 'You' : t.sender);
+
+                const time = document.createElement('div');
+                time.style.fontSize = '10px';
+                time.style.color = 'var(--text-secondary)';
+                const dateObj = t.time instanceof Date ? t.time : new Date();
+                time.innerText = String(dateObj.getHours()).padStart(2,'0') + ':' + String(dateObj.getMinutes()).padStart(2,'0');
+
+                left.appendChild(title);
+                left.appendChild(time);
+
+                const playBtn = document.createElement('button');
+                playBtn.innerText = '▶️ Play';
+                playBtn.style.cssText = 'background:rgba(0,168,132,0.2);border:1px solid var(--accent-green);color:#00e676;border-radius:6px;font-size:11px;font-weight:bold;padding:4px 10px;cursor:pointer;flex-shrink:0;';
+                playBtn.onclick = () => {
+                    const a = new Audio(t.url);
+                    a.play();
+                };
+
+                row.appendChild(left);
+                row.appendChild(playBtn);
+                list.appendChild(row);
+            });
+        }
+
         async function requestVoiceJoin() {
             try {
                 const res = await fetch('/api/voice/request', {
@@ -1378,10 +2341,10 @@ object WebPortalTemplate {
                     voicePanelState = 'requested';
                     startVoiceStatusPoll();
                 } else {
-                    document.getElementById('voice-panel-status').innerText = 'Could not request voice: ' + (data.reason || 'error');
+                    voicePanelState = 'requested';
                 }
             } catch(e) {
-                document.getElementById('voice-panel-status').innerText = 'Could not reach the host.';
+                voicePanelState = 'requested';
             }
             updateVoicePanel();
         }
@@ -1420,8 +2383,8 @@ object WebPortalTemplate {
         }
 
         async function startVoiceMic() {
-            if (window.location.protocol !== 'https:') {
-                alert('Voice needs the secure portal. Use the HTTPS link above.');
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                alert('Continuous microphone is restricted by this browser on plain HTTP. Please use the Walkie-Talkie button below, or open HTTPS / enable the Chrome flag.');
                 return false;
             }
             if (voiceAudio) stopVoiceMic();
@@ -1648,8 +2611,19 @@ object WebPortalTemplate {
 
         function updateBleUi() {
             const b = document.getElementById('ble-btn');
+            const badge = document.getElementById('menu-ble-badge');
+            if (badge) {
+                if (bleLink) {
+                    badge.innerText = 'Connected';
+                    badge.style.background = '#005d4b';
+                    badge.style.color = '#00e676';
+                } else {
+                    badge.innerText = 'Off';
+                    badge.style.background = 'rgba(255,255,255,0.08)';
+                    badge.style.color = 'var(--text-secondary)';
+                }
+            }
             if (b) {
-                b.classList.toggle('green', !!bleLink);
                 b.title = bleLink ? 'BLE chat connected — tap to disconnect' : 'Connect via Bluetooth (no WiFi needed)';
             }
             const ind = document.getElementById('transport-ind');
@@ -1815,12 +2789,38 @@ object WebPortalTemplate {
             fetchHistory();
         }
 
-        async function handleFileUpload(e) {
-            e.preventDefault();
+        function handleFileSelected(e) {
+            const selector = document.getElementById('file-selector');
+            if (!selector.files || selector.files.length === 0) return;
+            const file = selector.files[0];
+            const previewBar = document.getElementById('file-preview-bar');
+            const previewName = document.getElementById('file-preview-name');
+            if (previewBar && previewName) {
+                let sizeStr = '';
+                if (file.size > 1048576) {
+                    sizeStr = (file.size / 1048576).toFixed(1) + ' MB';
+                } else if (file.size > 1024) {
+                    sizeStr = (file.size / 1024).toFixed(0) + ' KB';
+                } else {
+                    sizeStr = file.size + ' B';
+                }
+                previewName.innerText = file.name + ' (' + sizeStr + ')';
+                previewBar.style.display = 'flex';
+            }
+        }
+
+        function cancelFileSelection() {
+            const selector = document.getElementById('file-selector');
+            if (selector) selector.value = '';
+            const previewBar = document.getElementById('file-preview-bar');
+            if (previewBar) previewBar.style.display = 'none';
+        }
+
+        async function submitSelectedFile() {
             const selector = document.getElementById('file-selector');
             if (!selector.files || selector.files.length === 0) return;
             const btn = document.getElementById('file-upload-btn');
-            btn.innerText = '⏳ Uploading...';
+            if (btn) btn.innerText = '⏳ Uploading...';
 
             const formData = new FormData();
             formData.append('sender', myName);
@@ -1829,15 +2829,22 @@ object WebPortalTemplate {
             try {
                 const res = await fetch('/upload', { method: 'POST', body: formData });
                 if (res.ok) {
-                    selector.value = '';
-                    btn.innerText = '📎 Share';
+                    cancelFileSelection();
+                    if (btn) btn.innerText = 'Upload';
                     fetchHistory();
                 } else {
-                    btn.innerText = '⚠️ Failed';
+                    if (btn) btn.innerText = '⚠️ Failed';
+                    setTimeout(() => { if (btn) btn.innerText = 'Upload'; }, 3000);
                 }
             } catch(err) {
-                btn.innerText = '⚠️ Error';
+                if (btn) btn.innerText = '⚠️ Error';
+                setTimeout(() => { if (btn) btn.innerText = 'Upload'; }, 3000);
             }
+        }
+
+        async function handleFileUpload(e) {
+            if (e) e.preventDefault();
+            await submitSelectedFile();
         }
 
         // Voice Note Recording Engine
@@ -1849,6 +2856,10 @@ object WebPortalTemplate {
         async function toggleVoiceRecording() {
             if (mediaRecorder && mediaRecorder.state === 'recording') {
                 stopAndSendVoiceRecording();
+                return;
+            }
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                triggerNativeVoiceRecord();
                 return;
             }
             try {
@@ -1867,7 +2878,8 @@ object WebPortalTemplate {
                     document.getElementById('voice-record-timer').innerText = '🔴 Recording Voice Note... ' + mins + ':' + secs;
                 }, 1000);
             } catch(err) {
-                alert('Microphone permission required for voice notes: ' + err.message);
+                console.warn('Microphone stream error, opening device recorder:', err);
+                triggerNativeVoiceRecord();
             }
         }
 
@@ -1918,13 +2930,91 @@ object WebPortalTemplate {
             } catch(e) {}
         }
 
+        // 3-Dot Overflow Dropdown Menu Handlers
+        function toggleHeaderMenu(e) {
+            if (e) {
+                e.stopPropagation();
+                e.preventDefault();
+            }
+            const menu = document.getElementById('header-dropdown-menu');
+            const backdrop = document.getElementById('menu-backdrop');
+            const btn = document.getElementById('header-menu-btn');
+            if (!menu) return;
+            const isVisible = menu.style.display === 'flex';
+            if (isVisible) {
+                closeHeaderMenu();
+            } else {
+                menu.style.display = 'flex';
+                if (backdrop) backdrop.style.display = 'block';
+                if (btn) btn.classList.add('active');
+                updateHeaderMenuStatus();
+            }
+        }
+
+        function closeHeaderMenu() {
+            const menu = document.getElementById('header-dropdown-menu');
+            const backdrop = document.getElementById('menu-backdrop');
+            const btn = document.getElementById('header-menu-btn');
+            if (menu) menu.style.display = 'none';
+            if (backdrop) backdrop.style.display = 'none';
+            if (btn) btn.classList.remove('active');
+        }
+
+        function updateHeaderMenuStatus() {
+            const e2eeBadge = document.getElementById('menu-e2ee-badge');
+            if (e2eeBadge) {
+                if (e2eeActive) {
+                    e2eeBadge.innerText = 'ON';
+                    e2eeBadge.style.background = '#005d4b';
+                    e2eeBadge.style.color = '#00e676';
+                } else {
+                    e2eeBadge.innerText = 'SETUP';
+                    e2eeBadge.style.background = 'rgba(255,152,0,0.15)';
+                    e2eeBadge.style.color = '#ff9800';
+                }
+            }
+            const themeSub = document.getElementById('menu-theme-subtitle');
+            if (themeSub) {
+                const isLight = document.body.classList.contains('light-theme');
+                themeSub.innerText = isLight ? 'Current: Light Theme' : 'Current: Dark Theme';
+            }
+            const bleBadge = document.getElementById('menu-ble-badge');
+            if (bleBadge) {
+                if (bleLink) {
+                    bleBadge.innerText = 'Connected';
+                    bleBadge.style.background = '#005d4b';
+                    bleBadge.style.color = '#00e676';
+                } else {
+                    bleBadge.innerText = 'Off';
+                    bleBadge.style.background = 'rgba(255,255,255,0.08)';
+                    bleBadge.style.color = 'var(--text-secondary)';
+                }
+            }
+        }
+
         function toggleTheme() {
             const isLight = document.body.classList.toggle('light-theme');
             localStorage.setItem('mesh_theme', isLight ? 'light' : 'dark');
+            updateHeaderMenuStatus();
         }
         if (localStorage.getItem('mesh_theme') === 'light') {
             document.body.classList.add('light-theme');
         }
+        setTimeout(updateHeaderMenuStatus, 100);
+
+        window.addEventListener('click', (e) => {
+            const menu = document.getElementById('header-dropdown-menu');
+            const btn = document.getElementById('header-menu-btn');
+            if (menu && menu.style.display === 'flex') {
+                if (!menu.contains(e.target) && (!btn || !btn.contains(e.target))) {
+                    closeHeaderMenu();
+                }
+            }
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeHeaderMenu();
+        });
 
         // Drag and Drop Upload Support
         window.addEventListener('dragover', (e) => {

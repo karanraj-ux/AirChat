@@ -119,11 +119,22 @@ class WebServerManager(
     private val voiceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var lastVoiceStateBroadcast = 0L
 
+    data class HostedTool(
+        val id: String,
+        val title: String,
+        val author: String,
+        val language: String,
+        val code: String,
+        val timestamp: Long = System.currentTimeMillis()
+    )
+
     companion object {
         const val VOICE_FRAME_TYPE_AUDIO: Byte = 0x01
         const val VOICE_VAD_THRESHOLD = 600 // PCM RMS energy for "speaking"
         const val VOICE_STATE_DEBOUNCE_MS = 300L
         const val VOICE_SPEAKING_TIMEOUT_MS = 700L
+
+        val sharedHostedTools = java.util.concurrent.ConcurrentHashMap<String, HostedTool>()
     }
 
     /** Phase 4 hook: host mutes/unmutes a guest (server drops their frames). */
@@ -294,11 +305,6 @@ class WebServerManager(
                             return@webSocket
                         }
                         // Never drop local network clients with VIOLATED_POLICY; auto-register them
-                        // Security: still enforce room seal and capacity limits
-                        if (isRoomFullOrSealed(ip)) {
-                            close(io.ktor.websocket.CloseReason(io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY, "Room sealed or capacity reached"))
-                            return@webSocket
-                        }
                         activeWebSockets[ip] = this
                         try {
                             val sender = call.request.queryParameters["sender"] ?: "Web Client"
@@ -309,7 +315,8 @@ class WebServerManager(
                             val job = launch {
                                 newMessagesFlow.collect { webMsg ->
                                     val sessionKey = MeshNetworkManager.webSessionKey
-                                    val json = if (sessionKey != null) {
+                                    val isPrivate = MeshNetworkManager.uiState.value.isPrivateRoom
+                                    val json = if (isPrivate && sessionKey != null) {
                                         val inner = org.json.JSONObject().apply {
                                             put("sender", webMsg.sender)
                                             put("message", webMsg.message)
@@ -320,7 +327,6 @@ class WebServerManager(
                                         val outer = org.json.JSONObject().apply {
                                             put("type", "e2ee")
                                             put("payload", encrypted)
-                                            // Fallback plain preview so clients without matching key can still read
                                             put("sender", webMsg.sender)
                                             put("message", webMsg.message)
                                         }
@@ -402,18 +408,18 @@ class WebServerManager(
                             call.respondText("Error loading chess: ${e.message}", status = io.ktor.http.HttpStatusCode.InternalServerError)
                         }
                     }
-                    get("/snake") {
+                    get("/connect4") {
                         try {
-                            call.respondText(com.aetherweb.app.PocketCdnPacks.SNAKE_HTML, io.ktor.http.ContentType.Text.Html)
+                            call.respondText(com.aetherweb.app.OfflineGamePacks.CONNECT_FOUR_HTML, io.ktor.http.ContentType.Text.Html)
                         } catch (e: Exception) {
-                            call.respondText("Error loading game: ${e.message}", status = io.ktor.http.HttpStatusCode.InternalServerError)
+                            call.respondText("Error loading Connect 4: ${e.message}", status = io.ktor.http.HttpStatusCode.InternalServerError)
                         }
                     }
-                    get("/pool") {
+                    get("/snake") {
                         try {
-                            call.respondText(com.aetherweb.app.PocketCdnPacks.POOL_GAME_HTML, io.ktor.http.ContentType.Text.Html)
-                        } catch(e: Exception) {
-                            call.respondText("Error loading pool game: ${e.message}", status = io.ktor.http.HttpStatusCode.InternalServerError)
+                            call.respondText(com.aetherweb.app.OfflineGamePacks.SNAKE_HTML, io.ktor.http.ContentType.Text.Html)
+                        } catch (e: Exception) {
+                            call.respondText("Error loading Snake: ${e.message}", status = io.ktor.http.HttpStatusCode.InternalServerError)
                         }
                     }
                     get("/ide") {
@@ -1062,6 +1068,158 @@ class WebServerManager(
                         }
                         call.respondText(obj.toString(), io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
                     }
+                    post("/api/crypto/verify-pin") {
+                        try {
+                            val text = call.receiveText()
+                            val json = org.json.JSONObject(text)
+                            val enteredPin = json.optString("pin").trim()
+                            val currentPin = MeshNetworkManager.uiState.value.webSessionPin.trim()
+                            val isPrivate = MeshNetworkManager.uiState.value.isPrivateRoom
+
+                            val isValid = if (!isPrivate || currentPin.isEmpty()) {
+                                true
+                            } else {
+                                enteredPin == currentPin
+                            }
+
+                            val resp = org.json.JSONObject().apply {
+                                put("verified", isValid)
+                                if (isValid) {
+                                    put("key", MeshNetworkManager.webSessionKeyHex)
+                                    put("fingerprint", MeshNetworkManager.webSessionFingerprint)
+                                } else {
+                                    put("error", "Invalid Room PIN. Please check host screen.")
+                                }
+                            }
+                            call.respondText(resp.toString(), io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
+                        } catch (e: Exception) {
+                            call.respondText("{\"verified\":false,\"error\":\"${e.message}\"}", io.ktor.http.ContentType.Application.Json, io.ktor.http.HttpStatusCode.OK)
+                        }
+                    }
+                    post("/api/crypto/decrypt") {
+                        try {
+                            val text = call.receiveText()
+                            val json = org.json.JSONObject(text)
+                            val payload = json.optString("payload")
+                            val sessionKey = MeshNetworkManager.webSessionKey
+                            if (sessionKey != null && payload.isNotEmpty()) {
+                                val decrypted = CryptoManager.decryptAES(payload, sessionKey)
+                                call.respondText(org.json.JSONObject().apply {
+                                    put("success", true)
+                                    put("plaintext", decrypted)
+                                }.toString(), io.ktor.http.ContentType.Application.Json)
+                            } else {
+                                call.respondText("{\"success\":false,\"error\":\"No active key or payload\"}", io.ktor.http.ContentType.Application.Json)
+                            }
+                        } catch (e: Exception) {
+                            call.respondText("{\"success\":false,\"error\":\"${e.message}\"}", io.ktor.http.ContentType.Application.Json)
+                        }
+                    }
+                    get("/tools/run/{id}") {
+                        val toolId = call.parameters["id"] ?: ""
+                        val tool = sharedHostedTools[toolId]
+                        if (tool != null) {
+                            if (tool.language.equals("HTML", ignoreCase = true)) {
+                                call.respondText(tool.code, io.ktor.http.ContentType.Text.Html)
+                            } else {
+                                val wrapped = """
+                                    <!DOCTYPE html>
+                                    <html>
+                                    <head>
+                                      <meta charset="UTF-8">
+                                      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                                      <title>${tool.title}</title>
+                                      <style>
+                                        body { background: #0f172a; color: #f8fafc; font-family: -apple-system, monospace; padding: 16px; margin: 0; }
+                                        h2 { color: #38bdf8; margin: 0 0 8px; font-size: 18px; }
+                                        .badge { display: inline-block; background: #1e293b; color: #94a3b8; font-size: 12px; padding: 3px 8px; border-radius: 6px; margin-bottom: 12px; border: 1px solid #334155; }
+                                        #console { background: #1e293b; border-radius: 10px; padding: 14px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; min-height: 200px; border: 1px solid #334155; color: #a7f3d0; }
+                                      </style>
+                                    </head>
+                                    <body>
+                                      <h2>⚡ ${tool.title}</h2>
+                                      <div class="badge">Author: ${tool.author} • ${tool.language}</div>
+                                      <div id="console">Initializing interactive execution...&#10;</div>
+                                      <script>
+                                        const c = document.getElementById('console');
+                                        function printLog(msg) { c.innerText += msg + '\n'; }
+                                        console.log = printLog;
+                                        console.warn = (m) => printLog('[WARN] ' + m);
+                                        console.error = (m) => printLog('[ERROR] ' + m);
+                                        try {
+                                            ${tool.code}
+                                            printLog('\n✨ Execution finished cleanly.');
+                                        } catch (e) {
+                                            printLog('\n❌ Error: ' + e.message);
+                                        }
+                                      </script>
+                                    </body>
+                                    </html>
+                                """.trimIndent()
+                                call.respondText(wrapped, io.ktor.http.ContentType.Text.Html)
+                            }
+                        } else {
+                            call.respondText("Tool not found or expired.", io.ktor.http.ContentType.Text.Plain, io.ktor.http.HttpStatusCode.NotFound)
+                        }
+                    }
+                    get("/api/tools/list") {
+                        val arr = org.json.JSONArray()
+                        sharedHostedTools.values.sortedByDescending { it.timestamp }.forEach { t ->
+                            arr.put(org.json.JSONObject().apply {
+                                put("id", t.id)
+                                put("title", t.title)
+                                put("author", t.author)
+                                put("language", t.language)
+                                put("timestamp", t.timestamp)
+                            })
+                        }
+                        call.respondText(arr.toString(), io.ktor.http.ContentType.Application.Json)
+                    }
+                    get("/api/radar/peers") {
+                        val peersArr = org.json.JSONArray()
+                        // 1. Android Host node
+                        val hostNode = org.json.JSONObject().apply {
+                            put("id", MeshNetworkManager.localNodeId)
+                            put("name", MeshNetworkManager.uiState.value.localUserName + " (Host)")
+                            put("role", "Host Gateway")
+                            put("type", "Android Host")
+                            put("isSelf", false)
+                            put("signal", 100)
+                            put("status", "Online")
+                        }
+                        peersArr.put(hostNode)
+                        // 2. Active Web clients
+                        activeWebSockets.keys.forEach { clientIp ->
+                            val webPeer = org.json.JSONObject().apply {
+                                put("id", clientIp)
+                                put("name", "Web Peer ($clientIp)")
+                                put("role", "Web Guest")
+                                put("type", "Browser")
+                                put("signal", 92)
+                                put("status", "Active")
+                            }
+                            peersArr.put(webPeer)
+                        }
+                        // 3. Known mesh peers
+                        MeshNetworkManager.uiState.value.knownUsers.forEach { (peerId, handle) ->
+                            if (peerId != MeshNetworkManager.localNodeId) {
+                                val meshPeer = org.json.JSONObject().apply {
+                                    put("id", peerId)
+                                    put("name", handle)
+                                    put("role", "Mesh Peer")
+                                    put("type", "Android Mesh")
+                                    put("signal", 85)
+                                    put("status", "Reachable")
+                                }
+                                peersArr.put(meshPeer)
+                            }
+                        }
+                        val res = org.json.JSONObject().apply {
+                            put("activeCount", peersArr.length())
+                            put("peers", peersArr)
+                        }
+                        call.respondText(res.toString(), io.ktor.http.ContentType.Application.Json)
+                    }
                     get("/api/history") {
                         try {
                             call.response.header("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -1069,11 +1227,12 @@ class WebServerManager(
                             call.response.header("Expires", "0")
                             val jsonArray = org.json.JSONArray()
                             val sessionKey = MeshNetworkManager.webSessionKey
+                            val isPrivate = MeshNetworkManager.uiState.value.isPrivateRoom
                             getChatHistory().forEachIndexed { index, (sender, msg) ->
                                 val obj = org.json.JSONObject()
                                 obj.put("id", index + 1)
                                 obj.put("isHistory", true)
-                                if (sessionKey != null) {
+                                if (isPrivate && sessionKey != null) {
                                     val inner = org.json.JSONObject().apply {
                                         put("sender", sender)
                                         put("message", msg)
@@ -2935,6 +3094,6 @@ class WebServerManager(
     canvas.addEventListener("touchend", () => isDrawing = false);
     canvas.addEventListener("mouseout", () => isDrawing = false);
 </script>
-        """
+""".trimIndent()
     }
 }

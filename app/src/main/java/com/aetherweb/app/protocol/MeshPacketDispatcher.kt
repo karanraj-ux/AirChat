@@ -53,8 +53,9 @@ object MeshPacketDispatcher {
             is MeshPacket.Chat -> {
                 // Drop loopback echo of our own outgoing messages (already added locally)
                 val isFromMyself = senderId == myNodeId || 
+                    senderId == "Me" ||
                     (packet.senderHandle.isNotBlank() && packet.senderHandle == manager._uiState.value.localUsernameId) ||
-                    (packet.senderName.isNotBlank() && packet.senderName == manager._uiState.value.localUserName && packet.recipientId == null)
+                    (packet.senderName.isNotBlank() && (packet.senderName == manager._uiState.value.localUserName || packet.senderName == "Me") && packet.recipientId == null)
                 if (isFromMyself) {
                     return true
                 }

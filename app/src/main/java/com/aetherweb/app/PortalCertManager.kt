@@ -71,14 +71,37 @@ object PortalCertManager {
             val builder = JcaX509v3CertificateBuilder(
                 dn, serial, now, expiry, dn, keyPair.public
             )
-            // SANs: the hotspot IP guests actually open, plus handy fallbacks.
-            val sanNames = arrayOf(
-                GeneralName(GeneralName.iPAddress, hostIp),
-                GeneralName(GeneralName.iPAddress, "127.0.0.1"),
-                GeneralName(GeneralName.dNSName, "localhost"),
-                GeneralName(GeneralName.dNSName, "nexus.run")
-            )
-            builder.addExtension(Extension.subjectAlternativeName, false, GeneralNames(sanNames))
+            // SANs: include hostIp, loopback, and all active device IP addresses
+            val ips = mutableSetOf<String>()
+            if (hostIp.isNotBlank()) ips.add(hostIp)
+            ips.add("127.0.0.1")
+            ips.add("10.0.2.15") // Android emulator gateway IP
+            ips.add("192.168.49.1") // Wi-Fi Direct Hotspot IP
+            ips.add("192.168.43.1") // Standard Android SoftAP IP
+            try {
+                val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
+                while (interfaces.hasMoreElements()) {
+                    val iface = interfaces.nextElement()
+                    val addresses = iface.inetAddresses
+                    while (addresses.hasMoreElements()) {
+                        val addr = addresses.nextElement()
+                        if (!addr.isLoopbackAddress && addr is java.net.Inet4Address) {
+                            addr.hostAddress?.let { if (it.isNotBlank()) ips.add(it) }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
+            val sanNames = mutableListOf<GeneralName>()
+            for (ip in ips) {
+                try {
+                    sanNames.add(GeneralName(GeneralName.iPAddress, ip))
+                } catch (_: Exception) {}
+            }
+            sanNames.add(GeneralName(GeneralName.dNSName, "localhost"))
+            sanNames.add(GeneralName(GeneralName.dNSName, "nexus.run"))
+
+            builder.addExtension(Extension.subjectAlternativeName, false, GeneralNames(sanNames.toTypedArray()))
             builder.addExtension(
                 Extension.keyUsage, true,
                 KeyUsage(KeyUsage.digitalSignature or KeyUsage.keyEncipherment)
